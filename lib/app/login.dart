@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:jurnal_mengajar/app/dashboard_admin.dart';
+import 'package:jurnal_mengajar/app/dashboard_guru.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:get/get.dart';
 import 'package:jurnal_mengajar/app/color.dart';
@@ -47,19 +48,49 @@ class _LoginState extends State<Login> {
     });
 
     try {
-      await _supabase.auth.signInWithPassword(email: email, password: password);
-
-      Get.snackbar(
-        'Success',
-        'Login Berhasil',
-        backgroundColor: Colors.green,
-        colorText: Colors.white,
+      final AuthResponse response = await _supabase.auth.signInWithPassword(
+        email: email, 
+        password: password
       );
 
-      Get.to(DashboardAdmin());
+      if (response.user != null) {
+        // Fetch role from profiles table
+        final List<dynamic> profileData = await _supabase
+            .from('profiles')
+            .select()
+            .eq('id', response.user!.id);
 
-      // Navigate to Home or next screen
-      // Get.offAllNamed('/home');
+        if (profileData.isNotEmpty) {
+          final role = profileData.first['role'];
+
+          Get.snackbar(
+            'Success',
+            'Login Berhasil',
+            backgroundColor: Colors.green,
+            colorText: Colors.white,
+          );
+
+          if (role == 'admin') {
+            Get.offAll(() => const DashboardAdmin());
+          } else if (role == 'guru') {
+            Get.offAll(() => const DashboardGuru());
+          } else {
+            Get.snackbar(
+              'Error',
+              'Role tidak dikenal',
+              backgroundColor: Colors.red,
+              colorText: Colors.white,
+            );
+          }
+        } else {
+          Get.snackbar(
+            'Error',
+            'Data profil tidak ditemukan',
+            backgroundColor: Colors.red,
+            colorText: Colors.white,
+          );
+        }
+      }
     } on AuthException catch (error) {
       Get.snackbar(
         'Login Failed',

@@ -1,0 +1,430 @@
+{
+  "info": {
+    "name": "API Jurnal Mengajar - Supabase",
+    "description": "Postman Collection for API Jurnal Mengajar (Supabase/PostgREST).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Sign In",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.access_token) {",
+                  "    pm.environment.set('ACCESS_TOKEN', jsonData.access_token);",
+                  "    pm.environment.set('REFRESH_TOKEN', jsonData.refresh_token);",
+                  "    if (jsonData.user && jsonData.user.id) {",
+                  "        pm.environment.set('USER_ID', jsonData.user.id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"your-password\"\n}"
+            },
+            "url": {
+              "raw": "{{SUPABASE_URL}}/auth/v1/token?grant_type=password",
+              "host": [
+                "{{SUPABASE_URL}}"
+              ],
+              "path": [
+                "auth",
+                "v1",
+                "token"
+              ],
+              "query": [
+                {
+                  "key": "grant_type",
+                  "value": "password"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "master_jam",
+      "item": [
+        {
+          "name": "Get All Jam",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/master_jam?select=*",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "master_jam"
+              ],
+              "query": [
+                {
+                  "key": "select",
+                  "value": "*"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Jam by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if(jsonData.length > 0) pm.environment.set('JAM_ID', jsonData[0].id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/master_jam?jam_ke=eq.1&select=*",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "master_jam"
+              ],
+              "query": [
+                {
+                  "key": "jam_ke",
+                  "value": "eq.1"
+                },
+                {
+                  "key": "select",
+                  "value": "*"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "profiles",
+      "item": [
+        {
+          "name": "Get All Profiles",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/profiles?select=*",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "profiles"
+              ],
+              "query": [
+                {
+                  "key": "select",
+                  "value": "*"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "master_kelas",
+      "item": [
+        {
+          "name": "Get All Master Kelas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/master_kelas?select=*",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "master_kelas"
+              ],
+              "query": [
+                {
+                  "key": "select",
+                  "value": "*"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "master_mata_pelajaran",
+      "item": [
+        {
+          "name": "Get All Mata Pelajaran",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/master_mata_pelajaran?select=*",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "master_mata_pelajaran"
+              ],
+              "query": [
+                {
+                  "key": "select",
+                  "value": "*"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "jadwal_mengajar",
+      "item": [
+        {
+          "name": "Get All Jadwal",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/jadwal_mengajar?select=*,profiles:guru_id(id,nama_lengkap),master_periode(nama_periode),master_kelas(nama_kelas),master_mata_pelajaran(nama_mata_pelajaran),master_jam(jam_ke,waktu_reguler,waktu_puasa)",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "jadwal_mengajar"
+              ],
+              "query": [
+                {
+                  "key": "select",
+                  "value": "*,profiles:guru_id(id,nama_lengkap),master_periode(nama_periode),master_kelas(nama_kelas),master_mata_pelajaran(nama_mata_pelajaran),master_jam(jam_ke,waktu_reguler,waktu_puasa)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Jadwal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if(jsonData.length > 0) pm.environment.set('JADWAL_ID', jsonData[0].id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Prefer",
+                "value": "return=representation"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"guru_id\": \"{{USER_ID}}\",\n  \"periode_id\": {{PERIODE_ID}},\n  \"kelas_id\": {{KELAS_ID}},\n  \"mata_pelajaran_id\": {{MAPEL_ID}},\n  \"tanggal\": \"{{TANGGAL_JADWAL}}\",\n  \"jam_id\": {{JAM_ID}},\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/jadwal_mengajar",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "jadwal_mengajar"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "jurnal_harian",
+      "item": [
+        {
+          "name": "Get All Jurnal",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              }
+            ],
+            "url": {
+              "raw": "{{BASE_URL}}/jurnal_harian?select=*,jadwal_mengajar(*,master_kelas(*),master_mata_pelajaran(*),master_jam(*),profiles:guru_id(nama_lengkap)),profiles:validated_by(nama_lengkap)",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "jurnal_harian"
+              ],
+              "query": [
+                {
+                  "key": "select",
+                  "value": "*,jadwal_mengajar(*,master_kelas(*),master_mata_pelajaran(*),master_jam(*),profiles:guru_id(nama_lengkap)),profiles:validated_by(nama_lengkap)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Jurnal Harian",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if(jsonData.length > 0) pm.environment.set('JURNAL_ID', jsonData[0].id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "apikey",
+                "value": "{{SUPABASE_ANON_KEY}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ACCESS_TOKEN}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Prefer",
+                "value": "return=representation"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jadwal_id\": {{JADWAL_ID}},\n  \"tanggal\": \"{{TANGGAL_JURNAL}}\",\n  \"materi\": \"Pengenalan OOP\",\n  \"catatan\": \"Anak anak aktif\",\n  \"status\": \"pending\"\n}"
+            },
+            "url": {
+              "raw": "{{BASE_URL}}/jurnal_harian",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "jurnal_harian"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

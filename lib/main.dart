@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:jurnal_mengajar/app/color.dart';
 import 'package:jurnal_mengajar/app/login.dart';
 import 'package:jurnal_mengajar/app/splash.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,6 +14,9 @@ Future<void> main() async {
     url: 'https://xfucaxclnsugqmtbqdqj.supabase.co',
     anonKey: 'sb_publishable_k-hHcizY39DUjnGhJPFyzw_YOk6ghLW',
   );
+
+  await initializeDateFormatting('id_ID', null);
+  Intl.defaultLocale = 'id_ID';
 
   runApp(const MyApp());
 }
