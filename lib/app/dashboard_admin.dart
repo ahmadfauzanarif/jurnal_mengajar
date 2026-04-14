@@ -297,6 +297,8 @@ class DashboardAdmin extends StatelessWidget {
                 fontWeight: FontWeight.bold,
                 fontFamily: GoogleFonts.poppins().fontFamily,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),

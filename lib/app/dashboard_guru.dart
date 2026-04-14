@@ -75,149 +75,160 @@ class DashboardGuru extends StatelessWidget {
         }),
       ),
       drawer: const DrawerGuru(),
-      body: Obx(() {
-        if (controller.isLoading.value &&
-            controller.schedules.isEmpty &&
-            controller.journals.isEmpty) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        return RefreshIndicator(
-          onRefresh: () =>
-              controller.fetchDataByDate(controller.selectedDate.value),
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildCalendarHeader(controller),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20.0,
-                    vertical: 10.0,
-                  ),
+      body: Column(
+        children: [
+          Obx(() => _buildCalendarHeader(controller)),
+          Expanded(
+            child: Obx(() {
+              if (controller.isLoading.value) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              return RefreshIndicator(
+                onRefresh: () =>
+                    controller.fetchDataByDate(controller.selectedDate.value),
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildSectionHeader(
-                        'Jadwal Mengajar',
-                        onTap: () {
-                          Get.to(() => const JadwalMengajarGuruPage());
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      if (controller.groupedSchedules.isEmpty)
-                        Text(
-                          'Tidak ada jadwal untuk tanggal ini.',
-                          style: TextStyle(
-                            fontFamily: GoogleFonts.poppins().fontFamily,
-                            color: Colors.grey,
-                          ),
-                        )
-                      else
-                        ...controller.groupedSchedules.map((group) {
-                          final firstSchedule = group.first;
-                          bool sudahDiisi = group.every(
-                            (s) => (s['jurnal_harian'] as List).isNotEmpty,
-                          );
-
-                          String startTime =
-                              group.first['master_jam']['waktu_reguler']
-                                  ?.split('-')[0]
-                                  .trim() ??
-                              '';
-                          String endTime =
-                              group.last['master_jam']['waktu_reguler']
-                                  ?.split('-')[1]
-                                  .trim() ??
-                              '';
-                          String time = '$startTime - $endTime';
-                          String jamKeList = group
-                              .map((s) => s['master_jam']['jam_ke'].toString())
-                              .join(', ');
-
-                          return _buildJadwalCard(
-                            time,
-                            '${firstSchedule['master_kelas']['nama_kelas'] ?? ''} (Jam $jamKeList)',
-                            firstSchedule['master_mata_pelajaran']['nama_mata_pelajaran'] ??
-                                '',
-                            sudahDiisi: sudahDiisi,
-                            onTap: () {
-                              _showDetailJadwal(
-                                context,
-                                firstSchedule,
-                                sudahDiisi,
-                                controller,
-                                groupedSchedules: group,
-                              );
-                            },
-                          );
-                        }),
-
-                      const SizedBox(height: 24),
-                      _buildSectionHeader(
-                        'Jurnal Mengajar',
-                        onTap: () {
-                          Get.to(() => const JurnalMengajarGuruPage());
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      if (controller.journals.isEmpty)
-                        Text(
-                          'Belum ada jurnal untuk tanggal ini.',
-                          style: TextStyle(
-                            fontFamily: GoogleFonts.poppins().fontFamily,
-                            color: Colors.grey,
-                          ),
-                        )
-                      else
-                        ...controller.journals.map((jurnal) {
-                          final jadwal = jurnal['jadwal_mengajar'];
-                          String className =
-                              jadwal['master_kelas']['nama_kelas'] ?? '-';
-                          String subject =
-                              jadwal['master_mata_pelajaran']['nama_mata_pelajaran'] ??
-                              '-';
-                          String status = jurnal['status'] ?? 'pending';
-
-                          // TODO: Replace with real attendance logic if applicable or from db calculation
-                          String attendance = 'S:0 I:0 A:0';
-
-                          return _buildJurnalCard(
-                            className,
-                            subject,
-                            attendance,
-                            status: status,
-                            onTap: () {
-                              if (status == 'validated' ||
-                                  status == 'approved' ||
-                                  status == 'disetujui') {
-                                Get.to(
-                                  () => DetailJurnalMengajarGuruPage(
-                                    jurnalId: jurnal['id'],
-                                  ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20.0,
+                          vertical: 10.0,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildSectionHeader(
+                              'Jadwal Mengajar',
+                              onTap: () {
+                                Get.to(() => const JadwalMengajarGuruPage());
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            if (controller.groupedSchedules.isEmpty)
+                              Text(
+                                'Tidak ada jadwal untuk tanggal ini.',
+                                style: TextStyle(
+                                  fontFamily: GoogleFonts.poppins().fontFamily,
+                                  color: Colors.grey,
+                                ),
+                              )
+                            else
+                              ...controller.groupedSchedules.map((group) {
+                                final firstSchedule = group.first;
+                                bool sudahDiisi = group.every(
+                                  (s) =>
+                                      (s['jurnal_harian'] as List).isNotEmpty,
                                 );
-                              } else {
-                                Get.to(
-                                  () => FormJurnalMengajarGuruPage(
-                                    schedule: jurnal['jadwal_mengajar'],
-                                    isEdit: true,
-                                    jurnalId: jurnal['id'],
-                                  ),
+
+                                String startTime =
+                                    group.first['master_jam']['waktu_reguler']
+                                        ?.split('-')[0]
+                                        .trim() ??
+                                    '';
+                                String endTime =
+                                    group.last['master_jam']['waktu_reguler']
+                                        ?.split('-')[1]
+                                        .trim() ??
+                                    '';
+                                String time = '$startTime - $endTime';
+                                String jamKeList = group
+                                    .map(
+                                      (s) =>
+                                          s['master_jam']['jam_ke'].toString(),
+                                    )
+                                    .join(', ');
+
+                                return _buildJadwalCard(
+                                  time,
+                                  '${firstSchedule['master_kelas']['nama_kelas'] ?? ''} (Jam $jamKeList)',
+                                  firstSchedule['master_mata_pelajaran']['nama_mata_pelajaran'] ??
+                                      '',
+                                  sudahDiisi: sudahDiisi,
+                                  onTap: () {
+                                    _showDetailJadwal(
+                                      context,
+                                      firstSchedule,
+                                      sudahDiisi,
+                                      controller,
+                                      groupedSchedules: group,
+                                    );
+                                  },
                                 );
-                              }
-                            },
-                          );
-                        }),
-                      const SizedBox(height: 24),
+                              }),
+
+                            const SizedBox(height: 24),
+                            _buildSectionHeader(
+                              'Jurnal Mengajar',
+                              onTap: () {
+                                Get.to(() => const JurnalMengajarGuruPage());
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            if (controller.journals.isEmpty)
+                              Text(
+                                'Belum ada jurnal untuk tanggal ini.',
+                                style: TextStyle(
+                                  fontFamily: GoogleFonts.poppins().fontFamily,
+                                  color: Colors.grey,
+                                ),
+                              )
+                            else
+                              ...controller.journals.map((jurnal) {
+                                final jadwal = jurnal['jadwal_mengajar'];
+                                String className =
+                                    jadwal['master_kelas']['nama_kelas'] ?? '-';
+                                String subject =
+                                    jadwal['master_mata_pelajaran']['nama_mata_pelajaran'] ??
+                                    '-';
+                                String status = jurnal['status'] ?? 'pending';
+
+                                // Perbaikan Presensi Riil
+                                final List presensi = jurnal['presensi_siswa'] as List? ?? [];
+                                int sCount = presensi.where((p) => p['status'].toString().toUpperCase().startsWith('S')).length;
+                                int iCount = presensi.where((p) => p['status'].toString().toUpperCase().startsWith('I')).length;
+                                int aCount = presensi.where((p) => p['status'].toString().toUpperCase().startsWith('A')).length;
+                                String attendance = 'S:$sCount I:$iCount A:$aCount';
+
+                                return _buildJurnalCard(
+                                  className,
+                                  subject,
+                                  attendance,
+                                  status: status,
+                                  onTap: () {
+                                    if (status == 'validated' ||
+                                        status == 'approved' ||
+                                        status == 'disetujui') {
+                                      Get.to(
+                                        () => DetailJurnalMengajarGuruPage(
+                                          jurnalId: jurnal['id'],
+                                        ),
+                                      );
+                                    } else {
+                                      Get.to(
+                                        () => FormJurnalMengajarGuruPage(
+                                          schedule: jurnal['jadwal_mengajar'],
+                                          isEdit: true,
+                                          jurnalId: jurnal['id'],
+                                        ),
+                                      );
+                                    }
+                                  },
+                                );
+                              }),
+                            const SizedBox(height: 24),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
-              ],
-            ),
+              );
+            }),
           ),
-        );
-      }),
+        ],
+      ),
     );
   }
 
@@ -286,16 +297,19 @@ class DashboardGuru extends StatelessWidget {
                           fontFamily: GoogleFonts.poppins().fontFamily,
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      Text(
-                        className,
-                        style: TextStyle(
-                          color: sudahDiisi
-                              ? MainColor.primaryColor
-                              : const Color(0xFFFDEBCA),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                          fontFamily: GoogleFonts.poppins().fontFamily,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          className,
+                          style: TextStyle(
+                            color: sudahDiisi
+                                ? MainColor.primaryColor
+                                : const Color(0xFFFDEBCA),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            fontFamily: GoogleFonts.poppins().fontFamily,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],
@@ -310,6 +324,8 @@ class DashboardGuru extends StatelessWidget {
                       fontSize: 14,
                       fontFamily: GoogleFonts.poppins().fontFamily,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
@@ -388,16 +404,21 @@ class DashboardGuru extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        subject,
-                        style: TextStyle(
-                          color: status == 'pending' || status == 'proses'
-                              ? Colors.white70
-                              : textColor.withOpacity(0.8),
-                          fontSize: 14,
-                          fontFamily: GoogleFonts.poppins().fontFamily,
+                      Expanded(
+                        child: Text(
+                          subject,
+                          style: TextStyle(
+                            color: status == 'pending' || status == 'proses'
+                                ? Colors.white70
+                                : textColor.withOpacity(0.8),
+                            fontSize: 14,
+                            fontFamily: GoogleFonts.poppins().fontFamily,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
                         attendance,
                         style: TextStyle(

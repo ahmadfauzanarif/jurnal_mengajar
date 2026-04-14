@@ -31,7 +31,7 @@ class JurnalMengajarGuruController extends GetxController {
       
       final journalRes = await supabase
           .from('jurnal_harian')
-          .select('*, jadwal_mengajar!inner(*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*)), profiles:validated_by(nama_lengkap)')
+          .select('*, presensi_siswa(*), jadwal_mengajar!inner(*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*)), profiles:validated_by(nama_lengkap)')
           .eq('jadwal_mengajar.guru_id', user.id)
           .eq('tanggal', dateStr);
 
@@ -102,8 +102,12 @@ class JurnalMengajarGuruPage extends StatelessWidget {
                         String subject = jadwal['master_mata_pelajaran']['nama_mata_pelajaran'] ?? '-';
                         String status = jurnal['status'] ?? 'pending';
                         
-                        // Wait for attendance logic or use static for now
-                        String attendance = 'S:0 I:0 A:0'; 
+                        // Parse attendance counts
+                        final List presensi = jurnal['presensi_siswa'] as List? ?? [];
+                        int sCount = presensi.where((p) => p['status'].toString().toUpperCase().startsWith('S')).length;
+                        int iCount = presensi.where((p) => p['status'].toString().toUpperCase().startsWith('I')).length;
+                        int aCount = presensi.where((p) => p['status'].toString().toUpperCase().startsWith('A')).length;
+                        String attendance = 'S:$sCount I:$iCount A:$aCount'; 
 
                         return _buildJurnalCard(
                           className, 
@@ -111,7 +115,7 @@ class JurnalMengajarGuruPage extends StatelessWidget {
                           attendance, 
                           status: status,
                           onTap: () {
-                            _showDetailOptions(context, jurnal, status);
+                            _handleCardTap(context, jurnal, status);
                           }
                         );
                       },
@@ -124,15 +128,41 @@ class JurnalMengajarGuruPage extends StatelessWidget {
     );
   }
 
-  void _showDetailOptions(BuildContext context, Map jurnal, String status) {
-    if (status == 'validated' || status == 'approved' || status == 'disetujui') {
+  void _handleCardTap(BuildContext context, Map jurnal, String status) {
+    if (status == 'validated' || status == 'approved' || status == 'disetujui' ) {
       Get.to(() => DetailJurnalMengajarGuruPage(jurnalId: jurnal['id']));
+    } else if (status == 'rejected' || status == 'ditolak') {
+      // Show rejection reason first then allow edit
+      Get.defaultDialog(
+        title: 'Jurnal Ditolak',
+        middleText: 'Catatan Admin: ${jurnal['catatan_admin'] ?? '-'}',
+        textConfirm: 'Edit Jurnal',
+        textCancel: 'Tutup',
+        confirmTextColor: Colors.white,
+        buttonColor: Colors.orange,
+        onConfirm: () {
+          Get.back();
+          Get.to(() => FormJurnalMengajarGuruPage(
+            schedule: jurnal['jadwal_mengajar'],
+            isEdit: true,
+            jurnalId: jurnal['id'],
+          ))?.then((val) {
+             if (val == true) {
+               Get.find<JurnalMengajarGuruController>().fetchDataByDate(Get.find<JurnalMengajarGuruController>().selectedDate.value);
+             }
+          });
+        }
+      );
     } else {
       Get.to(() => FormJurnalMengajarGuruPage(
         schedule: jurnal['jadwal_mengajar'],
         isEdit: true,
         jurnalId: jurnal['id'],
-      ));
+      ))?.then((val) {
+         if (val == true) {
+           Get.find<JurnalMengajarGuruController>().fetchDataByDate(Get.find<JurnalMengajarGuruController>().selectedDate.value);
+         }
+      });
     }
   }
 
@@ -188,14 +218,19 @@ class JurnalMengajarGuruPage extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        subject,
-                        style: TextStyle(
-                          color: status == 'pending' || status == 'proses' ? Colors.white70 : textColor.withOpacity(0.8),
-                          fontSize: 14,
-                          fontFamily: GoogleFonts.poppins().fontFamily,
+                      Expanded(
+                        child: Text(
+                          subject,
+                          style: TextStyle(
+                            color: status == 'pending' || status == 'proses' ? Colors.white70 : textColor.withOpacity(0.8),
+                            fontSize: 14,
+                            fontFamily: GoogleFonts.poppins().fontFamily,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
                         attendance,
                         style: TextStyle(

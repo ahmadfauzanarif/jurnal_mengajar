@@ -9,7 +9,7 @@ import 'package:intl/intl.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   await Supabase.initialize(
     url: 'https://xfucaxclnsugqmtbqdqj.supabase.co',
     anonKey: 'sb_publishable_k-hHcizY39DUjnGhJPFyzw_YOk6ghLW',
@@ -51,7 +51,7 @@ class MyApp extends StatelessWidget {
 
             if (session != null) {
               // User is already logged in
-              return const Login(); 
+              return const Login();
             } else {
               return const Login();
             }

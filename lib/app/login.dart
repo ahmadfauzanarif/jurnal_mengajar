@@ -5,6 +5,7 @@ import 'package:jurnal_mengajar/app/dashboard_guru.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:get/get.dart';
 import 'package:jurnal_mengajar/app/color.dart';
+import 'package:jurnal_mengajar/app/register_page.dart';
 
 class Login extends StatefulWidget {
   const Login({super.key});
@@ -49,8 +50,8 @@ class _LoginState extends State<Login> {
 
     try {
       final AuthResponse response = await _supabase.auth.signInWithPassword(
-        email: email, 
-        password: password
+        email: email,
+        password: password,
       );
 
       if (response.user != null) {
@@ -281,31 +282,31 @@ class _LoginState extends State<Login> {
                   const SizedBox(height: 24),
 
                   // Footer Text
-                  // Row(
-                  //   mainAxisAlignment: MainAxisAlignment.center,
-                  //   children: [
-                  //     Text(
-                  //       'Guru Baru? ',
-                  //       style: TextStyle(
-                  //         color: MainColor.secondaryText,
-                  //         fontFamily: GoogleFonts.poppins().fontFamily,
-                  //       ),
-                  //     ),
-                  //     GestureDetector(
-                  //       onTap: () {
-                  //         // TODO: Navigate to Registration
-                  //       },
-                  //       child: Text(
-                  //         'Daftar Disini',
-                  //         style: TextStyle(
-                  //           fontFamily: GoogleFonts.poppins().fontFamily,
-                  //           color: MainColor.primaryColor,
-                  //           fontWeight: FontWeight.bold,
-                  //         ),
-                  //       ),
-                  //     ),
-                  //   ],
-                  // ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'Guru Baru? ',
+                        style: TextStyle(
+                          color: MainColor.secondaryText,
+                          fontFamily: GoogleFonts.poppins().fontFamily,
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () {
+                          Get.to(() => const RegisterPage());
+                        },
+                        child: Text(
+                          'Daftar Disini',
+                          style: TextStyle(
+                            fontFamily: GoogleFonts.poppins().fontFamily,
+                            color: MainColor.primaryColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),

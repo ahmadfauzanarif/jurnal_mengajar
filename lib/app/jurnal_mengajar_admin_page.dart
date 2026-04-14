@@ -8,20 +8,22 @@ import 'package:get/get.dart';
 class JurnalMengajarAdminController extends GetxController {
   final supabase = Supabase.instance.client;
   var isLoading = false.obs;
-  
+
   var selectedDate = DateTime.now().obs;
   var journals = [].obs;
   var filteredJournals = [].obs;
   var showPendingOnly = false.obs;
   var searchQuery = "".obs;
 
-  JurnalMengajarAdminController({DateTime? initialDate, bool pendingOnly = false}) {
+  JurnalMengajarAdminController({
+    DateTime? initialDate,
+    bool pendingOnly = false,
+  }) {
     if (initialDate != null) {
       selectedDate.value = initialDate;
     }
     showPendingOnly.value = pendingOnly;
 
-    // Listen to search query change to filter locally
     debounce(
       searchQuery,
       (_) => filterLocal(),
@@ -44,23 +46,41 @@ class JurnalMengajarAdminController extends GetxController {
     isLoading.value = true;
     try {
       final dateStr = DateFormat('yyyy-MM-dd').format(date);
-      
+
+      // Mengambil data jurnal dengan join presensi_siswa secara mendalam
       final response = await supabase
           .from('jurnal_harian')
-          .select('*, jadwal:jadwal_mengajar!inner(*, profiles:guru_id(nama_lengkap,foto_url), master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*)), profiles:validated_by(nama_lengkap)')
-          .eq('tanggal', dateStr);
-          
+          .select('''
+            *,
+            presensi_siswa (
+              *,
+              master_siswa (
+                nama_siswa
+              )
+            ),
+            jadwal:jadwal_mengajar!inner (
+              *,
+              profiles:guru_id (nama_lengkap, foto_url),
+              master_kelas (nama_kelas),
+              master_mata_pelajaran (nama_mata_pelajaran),
+              master_jam (*)
+            ),
+            validated_by_profile:profiles!validated_by (nama_lengkap)
+          ''')
+          .eq('tanggal', dateStr)
+          .order('created_at', ascending: false);
+
       if (showPendingOnly.value) {
-        journals.assignAll(response
-            .where((j) =>
-                j['status'] != 'approved' && j['is_verified'] != true)
-            .toList());
+        journals.assignAll(
+          response.where((j) => j['status'] == 'pending').toList(),
+        );
       } else {
         journals.assignAll(response);
       }
       filterLocal();
     } catch (e) {
-      Get.snackbar('Error', e.toString());
+      print('Fetch Data Admin Error: $e');
+      Get.snackbar('Error', 'Gagal memuat data jurnal: $e');
     } finally {
       isLoading.value = false;
     }
@@ -71,49 +91,54 @@ class JurnalMengajarAdminController extends GetxController {
       filteredJournals.assignAll(journals);
     } else {
       final query = searchQuery.value.toLowerCase();
-      filteredJournals.assignAll(journals.where((j) {
-        final materi = (j['materi'] ?? "").toString().toLowerCase();
-        final catatan = (j['catatan'] ?? "").toString().toLowerCase();
-        final guru = (j['jadwal']?['profiles']?['nama_lengkap'] ?? "")
-            .toString()
-            .toLowerCase();
-        final mapel = (j['jadwal']?['master_mata_pelajaran']
-                    ?['nama_mata_pelajaran'] ??
-                "")
-            .toString()
-            .toLowerCase();
-        final kelas = (j['jadwal']?['master_kelas']?['nama_kelas'] ?? "")
-            .toString()
-            .toLowerCase();
-
-        return materi.contains(query) ||
-            catatan.contains(query) ||
-            guru.contains(query) ||
-            mapel.contains(query) ||
-            kelas.contains(query);
-      }).toList());
+      filteredJournals.assignAll(
+        journals.where((j) {
+          final materi = (j['materi'] ?? "").toString().toLowerCase();
+          final catatan = (j['catatan'] ?? "").toString().toLowerCase();
+          final guru = (j['jadwal']?['profiles']?['nama_lengkap'] ?? "")
+              .toString()
+              .toLowerCase();
+          final mapel =
+              (j['jadwal']?['master_mata_pelajaran']?['nama_mata_pelajaran'] ??
+                      "")
+                  .toString()
+                  .toLowerCase();
+          final kelas = (j['jadwal']?['master_kelas']?['nama_kelas'] ?? "")
+              .toString()
+              .toLowerCase();
+          return materi.contains(query) ||
+              catatan.contains(query) ||
+              guru.contains(query) ||
+              mapel.contains(query) ||
+              kelas.contains(query);
+        }).toList(),
+      );
     }
   }
 
-  Future<void> validateJurnal(int id, String status) async {
+  Future<void> validateJurnal(
+    int id,
+    String status, {
+    String? catatanAdmin,
+  }) async {
     isLoading.value = true;
     try {
-      // Assuming 'status' is either 'approved' or 'rejected', and 'validated_by'
-      // Based on UI screenshot, validation flips it to checked, but let's use status or is_verified boolean
-      // Let's assume table has 'status' (pending, approved, rejected) or 'is_verified' (bool)
-      // I will update status. Since Postman mentioned "status": "pending", let's use 'status': 'approved'.
-      
       final userId = supabase.auth.currentUser?.id;
-      
-      await supabase.from('jurnal_harian').update({
-        'status': status,
-        'validated_by': userId,
-      }).eq('id', id);
-      
+
+      await supabase
+          .from('jurnal_harian')
+          .update({
+            'status': status,
+            'validated_by': userId,
+            'validated_at': DateTime.now().toIso8601String(),
+            'catatan_admin': catatanAdmin,
+          })
+          .eq('id', id);
+
       await fetchDataByDate(selectedDate.value);
-      Get.snackbar('Sukses', 'Jurnal berhasil $status');
+      Get.snackbar('Berhasil', 'Status jurnal diperbarui menjadi $status');
     } catch (e) {
-      Get.snackbar('Error', 'Gagal memvalidasi jurnal: $e');
+      Get.snackbar('Gagal', 'Gagal memperbarui jurnal: $e');
     } finally {
       isLoading.value = false;
     }
@@ -124,19 +149,29 @@ class JurnalMengajarAdminPage extends StatelessWidget {
   final DateTime? initialDate;
   final bool showPendingOnly;
 
-  const JurnalMengajarAdminPage({super.key, this.initialDate, this.showPendingOnly = false});
+  const JurnalMengajarAdminPage({
+    super.key,
+    this.initialDate,
+    this.showPendingOnly = false,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final controller = Get.put(JurnalMengajarAdminController(initialDate: initialDate, pendingOnly: showPendingOnly));
+    final controller = Get.put(
+      JurnalMengajarAdminController(
+        initialDate: initialDate,
+        pendingOnly: showPendingOnly,
+      ),
+    );
 
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
         title: Text(
-          'Jurnal Mengajar',
+          'Jurnal Mengajar Admin',
           style: TextStyle(
             color: Colors.white,
+            fontWeight: FontWeight.bold,
             fontFamily: GoogleFonts.poppins().fontFamily,
           ),
         ),
@@ -145,26 +180,22 @@ class JurnalMengajarAdminPage extends StatelessWidget {
       ),
       body: Column(
         children: [
-          const SizedBox(height: 16),
           _buildHorizontalCalendar(controller),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 0),
-            child: Divider(thickness: 1, color: Color(0xFFEEDBCB)),
-          ),
+          const Divider(thickness: 1, height: 1, color: Color(0xFFF0F0F0)),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            padding: const EdgeInsets.all(16),
             child: TextField(
               onChanged: (val) => controller.searchQuery.value = val,
               decoration: InputDecoration(
-                hintText: 'Cari Guru, Materi, Mapel, atau Kelas...',
+                hintText: 'Cari guru, materi, ksl...',
                 prefixIcon: const Icon(Icons.search),
-                contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                filled: true,
+                fillColor: Colors.grey.shade100,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
                 ),
-                fillColor: MainColor.primaryBackground,
-                filled: true,
+                contentPadding: EdgeInsets.zero,
               ),
             ),
           ),
@@ -173,18 +204,36 @@ class JurnalMengajarAdminPage extends StatelessWidget {
               if (controller.isLoading.value) {
                 return const Center(child: CircularProgressIndicator());
               }
-
               if (controller.filteredJournals.isEmpty) {
-                return const Center(child: Text('Tidak ada jurnal ditemukan'));
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.assignment_late_outlined,
+                        size: 64,
+                        color: Colors.grey.shade300,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Tidak ada data jurnal hari ini',
+                        style: TextStyle(color: Colors.grey.shade500),
+                      ),
+                    ],
+                  ),
+                );
               }
-
-              return ListView.builder(
-                itemCount: controller.filteredJournals.length,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemBuilder: (context, index) {
-                  final j = controller.filteredJournals[index];
-                  return _buildJurnalCard(context, j, controller);
-                },
+              return RefreshIndicator(
+                onRefresh: () =>
+                    controller.fetchDataByDate(controller.selectedDate.value),
+                child: ListView.builder(
+                  itemCount: controller.filteredJournals.length,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemBuilder: (context, index) {
+                    final j = controller.filteredJournals[index];
+                    return _buildJurnalCard(context, j, controller);
+                  },
+                ),
               );
             }),
           ),
@@ -197,200 +246,156 @@ class JurnalMengajarAdminPage extends StatelessWidget {
     return Obx(() {
       DateTime now = controller.selectedDate.value;
       DateTime startOfWeek = now.subtract(Duration(days: now.weekday % 7));
-      
-      return Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                IconButton(
-                  icon: Icon(Icons.arrow_back_ios, size: 18, color: MainColor.primaryColor),
-                  onPressed: () => controller.changeDate(controller.selectedDate.value.subtract(const Duration(days: 1))),
-                ),
-                Text(
-                  DateFormat('MMMM yyyy', 'id_ID').format(controller.selectedDate.value),
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: MainColor.primaryColor,
-                    fontFamily: GoogleFonts.poppins().fontFamily,
-                  ),
-                ),
-                IconButton(
-                  icon: Icon(Icons.arrow_forward_ios, size: 18, color: MainColor.primaryColor),
-                  onPressed: () => controller.changeDate(controller.selectedDate.value.add(const Duration(days: 1))),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12.0),
-            child: Row(
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: List.generate(7, (index) {
                 DateTime day = startOfWeek.add(Duration(days: index));
-                bool isSelected = DateFormat('yyyy-MM-dd').format(day) ==
-                    DateFormat('yyyy-MM-dd').format(controller.selectedDate.value);
-
-                return Expanded(
-                  child: GestureDetector(
-                    onTap: () => controller.changeDate(day),
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      decoration: BoxDecoration(
-                        color: isSelected ? MainColor.primaryColor : Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
+                bool isSelected =
+                    DateFormat('yyyy-MM-dd').format(day) ==
+                    DateFormat(
+                      'yyyy-MM-dd',
+                    ).format(controller.selectedDate.value);
+                return GestureDetector(
+                  onTap: () => controller.changeDate(day),
+                  child: Column(
+                    children: [
+                      Text(
+                        DateFormat('E', 'id_ID').format(day),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isSelected
+                              ? MainColor.primaryColor
+                              : Colors.grey,
+                        ),
                       ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            DateFormat('E', 'id_ID').format(day).toLowerCase(),
-                            style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.grey,
-                              fontSize: 12,
-                              fontFamily: GoogleFonts.poppins().fontFamily,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
+                      const SizedBox(height: 8),
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? MainColor.primaryColor
+                              : Colors.transparent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: Text(
                             day.day.toString(),
                             style: TextStyle(
-                              color: isSelected ? Colors.white : MainColor.primaryText,
+                              color: isSelected ? Colors.white : Colors.black,
                               fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                              fontFamily: GoogleFonts.poppins().fontFamily,
                             ),
                           ),
-                        ],
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 );
               }),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     });
   }
 
-  Widget _buildJurnalCard(BuildContext context, Map<String, dynamic> j, JurnalMengajarAdminController controller) {
+  Widget _buildJurnalCard(
+    BuildContext context,
+    Map<String, dynamic> j,
+    JurnalMengajarAdminController controller,
+  ) {
     final schedule = j['jadwal'] ?? {};
     final guru = schedule['profiles'] ?? {};
-    final kelas = schedule['master_kelas'] != null ? schedule['master_kelas']['nama_kelas'] : '-';
-    final mapel = schedule['master_mata_pelajaran'] != null ? schedule['master_mata_pelajaran']['nama_mata_pelajaran'] : '-';
-    final String guruName = guru['nama_lengkap'] ?? '-';
-    
-    // Status Logic
-    bool isValidated = j['status'] == 'approved' || j['is_verified'] == true;
-    bool isLate = j['istelat'] == true; // from user requirement
+    final guruName = (guru['nama_lengkap'] ?? '-').toString();
+    final status = j['status'] ?? 'pending';
 
-    Color bgColor = isValidated ? MainColor.validateColor : MainColor.secondaryColor;
-    if (isLate && !isValidated) {
-      // Late styling. User said "warna khusus" when late filling
-      bgColor = Colors.redAccent.shade100;
-    }
-
-    Color textColor = isValidated ? MainColor.secondaryText : Colors.white;
+    Color accentColor = status == 'approved'
+        ? Colors.green
+        : (status == 'rejected' ? Colors.orange : MainColor.primaryColor);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(10),
-        border: isLate ? Border.all(color: Colors.red, width: 1.5) : null,
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: () {
-            // Show Detail Sheet for Validation
-            _showDetailSheet(context, j, controller);
-          },
-          child: Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 25,
-                  backgroundImage: NetworkImage(
-                    guru['foto_url'] != null && guru['foto_url'].isNotEmpty
-                        ? guru['foto_url']
-                        : 'https://ui-avatars.com/api/?name=$guruName&background=random',
+      child: ListTile(
+        onTap: () => _showDetailSheet(context, j, controller),
+        leading: CircleAvatar(
+          backgroundImage: NetworkImage(
+            guru['foto_url'] ?? 'https://ui-avatars.com/api/?name=$guruName',
+          ),
+        ),
+        title: Text(
+          guruName,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              "${schedule['master_kelas']?['nama_kelas'] ?? '-'} • ${schedule['master_mata_pelajaran']?['nama_mata_pelajaran'] ?? '-'}",
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 2),
+            Builder(
+              builder: (context) {
+                final List presensi = j['presensi_siswa'] as List? ?? [];
+                int sCount = presensi
+                    .where(
+                      (p) =>
+                          p['status'].toString().toUpperCase().startsWith('S'),
+                    )
+                    .length;
+                int iCount = presensi
+                    .where(
+                      (p) =>
+                          p['status'].toString().toUpperCase().startsWith('I'),
+                    )
+                    .length;
+                int aCount = presensi
+                    .where(
+                      (p) =>
+                          p['status'].toString().toUpperCase().startsWith('A'),
+                    )
+                    .length;
+                return Text(
+                  "S:$sCount I:$iCount A:$aCount",
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500,
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              guruName,
-                              style: TextStyle(
-                                color: isValidated ? MainColor.primaryColor : Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                fontFamily: GoogleFonts.poppins().fontFamily,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          Icon(
-                            Icons.check_circle,
-                            color: isValidated ? MainColor.sudahValidasiCheckColor : Colors.white70,
-                            size: 20,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        kelas,
-                        style: TextStyle(
-                          color: textColor,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                          fontFamily: GoogleFonts.poppins().fontFamily,
-                        ),
-                      ),
-                      Text(
-                        mapel,
-                        style: TextStyle(
-                          color: isValidated ? MainColor.secondaryText : Colors.white70,
-                          fontSize: 12,
-                          fontFamily: GoogleFonts.poppins().fontFamily,
-                        ),
-                      ),
-                      if (isLate) 
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4.0),
-                          child: Text(
-                            'Telat Mengisi',
-                            style: TextStyle(
-                              color: Colors.red.shade900,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 10,
-                              fontStyle: FontStyle.italic
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  Icons.arrow_forward_ios,
-                  color: isValidated ? MainColor.secondaryText : Colors.white,
-                  size: 16,
-                )
-              ],
+                );
+              },
+            ),
+          ],
+        ),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: accentColor.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            status.toUpperCase(),
+            style: TextStyle(
+              color: accentColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 10,
             ),
           ),
         ),
@@ -398,216 +403,324 @@ class JurnalMengajarAdminPage extends StatelessWidget {
     );
   }
 
-  void _showDetailSheet(BuildContext context, Map<String, dynamic> j, JurnalMengajarAdminController controller) {
+  void _showDetailSheet(
+    BuildContext context,
+    Map<String, dynamic> j,
+    JurnalMengajarAdminController controller,
+  ) {
     final schedule = j['jadwal'] ?? {};
-    final jam = schedule['master_jam'] ?? {};
     final guru = schedule['profiles'] ?? {};
-    final mapel = schedule['master_mata_pelajaran'] != null ? schedule['master_mata_pelajaran']['nama_mata_pelajaran'] : '-';
-    final kelas = schedule['master_kelas'] != null ? schedule['master_kelas']['nama_kelas'] : '-';
-    
-    // Default attendance placeholder or decode if exists
-    final sakit = j['sakit'] ?? 0;
-    final izin = j['izin'] ?? 0;
-    final alpha = j['alpha'] ?? 0;
+    final List presensi = j['presensi_siswa'] as List? ?? [];
 
-    bool isValidated = j['status'] == 'approved' || j['is_verified'] == true;
+    // Parse foto lampiran
+    final String photoStr = j['foto_lampiran_url']?.toString() ?? "";
+    final List<String> photoList = photoStr.isNotEmpty
+        ? photoStr.split(',').map((e) => e.trim()).toList()
+        : [];
+
+    final sakit = presensi
+        .where((p) => p['status'].toString().toUpperCase().startsWith('S'))
+        .toList();
+    final izin = presensi
+        .where((p) => p['status'].toString().toUpperCase().startsWith('I'))
+        .toList();
+    final alpha = presensi
+        .where((p) => p['status'].toString().toUpperCase().startsWith('A'))
+        .toList();
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      backgroundColor: Colors.white,
-      builder: (ctx) {
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final rejectNoteController = TextEditingController();
         return Container(
+          height: MediaQuery.of(context).size.height * 0.9,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
           padding: const EdgeInsets.all(24),
-          height: MediaQuery.of(context).size.height * 0.85,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header Image
-              Container(
-                height: 200,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  color: Colors.grey.shade200,
-                  image: j['foto_url'] != null 
-                    ? DecorationImage(
-                        image: NetworkImage(j['foto_url']),
-                        fit: BoxFit.cover,
-                      )
-                    : null,
-                ),
-                child: j['foto_url'] == null 
-                  ? const Center(child: Icon(Icons.image, size: 50, color: Colors.grey))
-                  : null,
-              ),
-              const SizedBox(height: 16),
-              
-              Text(
-                guru['nama_lengkap'] ?? '-',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: MainColor.primaryText,
-                  fontFamily: GoogleFonts.poppins().fontFamily,
-                ),
-              ),
-              Text(
-                kelas,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: MainColor.primaryColor,
-                  fontFamily: GoogleFonts.poppins().fontFamily,
-                ),
-              ),
-              Text(
-                mapel,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: MainColor.secondaryText,
-                  fontFamily: GoogleFonts.poppins().fontFamily,
-                ),
-              ),
-              const SizedBox(height: 16),
-              
-              Row(
-                children: [
-                  Icon(Icons.calendar_today, size: 16, color: MainColor.primaryColor),
-                  const SizedBox(width: 8),
-                  Text(
-                    DateFormat('dd MMMM yyyy', 'id_ID').format(DateTime.parse(j['tanggal'])),
-                    style: TextStyle(fontFamily: GoogleFonts.poppins().fontFamily)
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                  const SizedBox(width: 24),
-                  Icon(Icons.access_time, size: 16, color: MainColor.primaryColor),
-                  const SizedBox(width: 8),
-                  Text(
-                    jam['waktu_reguler'] ?? '-',
-                    style: TextStyle(fontFamily: GoogleFonts.poppins().fontFamily)
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Divider(color: MainColor.validateColor),
-              const SizedBox(height: 12),
-              
-              Text(
-                'Materi: ${j['materi'] ?? '-'}',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: MainColor.primaryText,
-                  fontFamily: GoogleFonts.poppins().fontFamily,
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                j['catatan'] ?? 'Tidak ada catatan tambahan',
-                style: TextStyle(
-                  color: MainColor.secondaryText,
-                  fontFamily: GoogleFonts.poppins().fontFamily,
-                ),
-              ),
-              const SizedBox(height: 24),
+                const SizedBox(height: 24),
 
-              // Attendance
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _buildAbsenBox('Sakit', sakit.toString()),
-                  _buildAbsenBox('Izin', izin.toString()),
-                  _buildAbsenBox('Alpha', alpha.toString(), isOutline: true),
-                ],
-              ),
-              const Spacer(),
+                // CAROUSEL FOTO
+                if (photoList.isNotEmpty)
+                  SizedBox(
+                    height: 200,
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: photoList.length,
+                      itemBuilder: (context, idx) {
+                        return Container(
+                          width: 300,
+                          margin: const EdgeInsets.only(right: 12),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            image: DecorationImage(
+                              image: NetworkImage(photoList[idx]),
+                              fit: BoxFit.cover,
+                            ),
+                            color: Colors.grey.shade100,
+                          ),
+                        );
+                      },
+                    ),
+                  )
+                else
+                  Container(
+                    height: 150,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Center(child: Text('Tidak ada foto lampiran')),
+                  ),
 
-              if (!isValidated)
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: MainColor.accentColor,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15),
+                const SizedBox(height: 24),
+                Text(
+                  guru['nama_lengkap'] ?? '-',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  "${schedule['master_kelas']?['nama_kelas'] ?? '-'} | ${schedule['master_mata_pelajaran']?['nama_mata_pelajaran'] ?? '-'}",
+                  style: TextStyle(
+                    color: MainColor.primaryColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 16),
+                const Text(
+                  'Materi Pembelajaran:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(j['materi'] ?? '-'),
+                const SizedBox(height: 16),
+                const Text(
+                  'Catatan Guru:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  j['catatan'] ?? '-',
+                  style: const TextStyle(color: Colors.grey),
+                ),
+
+                const SizedBox(height: 24),
+
+                // ABSENSI SUMMARY
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildStatAbsen(
+                      'SAKIT',
+                      sakit.length.toString(),
+                      Colors.orange,
+                    ),
+                    _buildStatAbsen(
+                      'IZIN',
+                      izin.length.toString(),
+                      Colors.blue,
+                    ),
+                    _buildStatAbsen(
+                      'ALPHA',
+                      alpha.length.toString(),
+                      Colors.red,
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 24),
+
+                // LIST DETAIL SISWA
+                const Text(
+                  'Daftar Siswa Tidak Hadir:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                if (presensi.isEmpty)
+                  const Text(
+                    'Semua siswa hadir.',
+                    style: TextStyle(
+                      fontStyle: FontStyle.italic,
+                      color: Colors.grey,
+                    ),
+                  )
+                else
+                  ...presensi.map(
+                    (p) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        radius: 4,
+                        backgroundColor:
+                            p['status'].toString().toUpperCase().startsWith('S')
+                            ? Colors.orange
+                            : (p['status'].toString().toUpperCase().startsWith(
+                                    'I',
+                                  )
+                                  ? Colors.blue
+                                  : Colors.red),
+                      ),
+                      title: Text(
+                        p['master_siswa']?['nama_siswa'] ??
+                            'Siswa Tidak Dikenal',
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      trailing: Text(
+                        p['status'].toString().toUpperCase(),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ),
-                    onPressed: () {
-                      Get.back();
-                      controller.validateJurnal(j['id'], 'approved');
-                    },
+                  ),
+
+                const SizedBox(height: 32),
+
+                // ACTION BUTTONS
+                if (j['status'] == 'pending') ...[
+                  TextField(
+                    controller: rejectNoteController,
+                    decoration: InputDecoration(
+                      hintText:
+                          'Tambahkan catatan admin (wajib jika ditolak)...',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                    ),
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: () {
+                            if (rejectNoteController.text.isEmpty) {
+                              Get.snackbar(
+                                'Gagal',
+                                'Catatan wajib diisi untuk menolak',
+                              );
+                              return;
+                            }
+                            Get.back();
+                            controller.validateJurnal(
+                              j['id'],
+                              'rejected',
+                              catatanAdmin: rejectNoteController.text,
+                            );
+                          },
+                          child: const Text(
+                            'TOLAK',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: () {
+                            Get.back();
+                            controller.validateJurnal(
+                              j['id'],
+                              'approved',
+                              catatanAdmin: rejectNoteController.text,
+                            );
+                          },
+                          child: const Text(
+                            'SETUJUI',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: j['status'] == 'approved'
+                          ? Colors.green.shade50
+                          : Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: Text(
-                      'Validasi',
+                      j['status'] == 'approved'
+                          ? "Sudah Disetujui"
+                          : "Ditolak: ${j['catatan_admin'] ?? '-'}",
+                      textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
+                        color: j['status'] == 'approved'
+                            ? Colors.green
+                            : Colors.orange,
                         fontWeight: FontWeight.bold,
-                        fontFamily: GoogleFonts.poppins().fontFamily,
                       ),
                     ),
                   ),
-                )
-              else
-                Container(
-                  width: double.infinity,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    color: MainColor.sudahValidasiCheckColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(15)
-                  ),
-                  child: Center(
-                    child: Text(
-                      'Sudah Divalidasi',
-                      style: TextStyle(
-                        color: MainColor.sudahValidasiCheckColor,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        fontFamily: GoogleFonts.poppins().fontFamily,
-                      ),
-                    ),
-                  ),
-                )
-            ],
+                const SizedBox(height: 40),
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _buildAbsenBox(String title, String count, {bool isOutline = false}) {
-    return Container(
-      width: 70,
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: BoxDecoration(
-        color: isOutline ? Colors.white : MainColor.alternateColor,
-        borderRadius: BorderRadius.circular(10),
-        border: isOutline ? Border.all(color: MainColor.primaryColor, width: 2) : null,
-      ),
-      child: Column(
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              color: MainColor.primaryText,
-              fontWeight: FontWeight.bold,
-              fontFamily: GoogleFonts.poppins().fontFamily,
-            ),
+  Widget _buildStatAbsen(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 32,
+            fontWeight: FontWeight.bold,
+            color: color,
           ),
-          const SizedBox(height: 4),
-          Text(
-            count,
-            style: TextStyle(
-              color: MainColor.primaryColor,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              fontFamily: GoogleFonts.poppins().fontFamily,
-            ),
+        ),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color.withOpacity(0.6),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

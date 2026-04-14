@@ -83,7 +83,7 @@ class DashboardGuruController extends GetxController {
       // Fetch journals
       final journalRes = await supabase
           .from('jurnal_harian')
-          .select('*, jadwal_mengajar!inner(*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*))')
+          .select('*, presensi_siswa(*), jadwal_mengajar!inner(*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*))')
           .eq('jadwal_mengajar.guru_id', user.id)
           .eq('tanggal', dateStr);
 

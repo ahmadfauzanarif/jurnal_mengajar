@@ -23,6 +23,8 @@ class FormJurnalGuruController extends GetxController {
   });
 
   var isLoading = false.obs;
+  var jurnalStatus = "pending".obs;
+  var catatanAdmin = "".obs;
 
   var isHadirSemua = false.obs;
 
@@ -50,7 +52,77 @@ class FormJurnalGuruController extends GetxController {
     maxDate.value = DateTime.parse(schedule['tanggal']);
     minDate.value = maxDate.value.subtract(const Duration(days: 3));
 
-    fetchSiswa();
+    _initForm();
+  }
+
+  Future<void> _initForm() async {
+    await fetchSiswa();
+    if (isEdit && jurnalId != null) {
+      await fetchJournalData();
+    }
+  }
+
+  Future<void> fetchJournalData() async {
+    isLoading.value = true;
+    try {
+      final res = await supabase
+          .from('jurnal_harian')
+          .select()
+          .eq('id', jurnalId!)
+          .single();
+
+      materiController.text = res['materi'] ?? '';
+      catatanController.text = res['catatan'] ?? '';
+      jurnalStatus.value = res['status'] ?? 'pending';
+      catatanAdmin.value = res['catatan_admin'] ?? '';
+      
+      if (res['tanggal'] != null) {
+        selectedTanggal.value = DateTime.parse(res['tanggal']);
+      }
+
+      if (res['foto_lampiran_url'] != null &&
+          res['foto_lampiran_url'].toString().isNotEmpty) {
+        existingImagesUrl.value = res['foto_lampiran_url']
+            .toString()
+            .split(',')
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+
+      // Fetch presensi
+      final presensiRes = await supabase
+          .from('presensi_siswa')
+          .select()
+          .eq('jurnal_id', jurnalId!);
+
+      for (var p in presensiRes) {
+        final siswaId = p['siswa_id'] as int;
+        final status = p['status'] as String;
+        // Normalize status to single char if needed, though DB seems to support both
+        String normalizedStatus = status;
+        if (status == 'Hadir')
+          normalizedStatus = 'H';
+        else if (status == 'Sakit')
+          normalizedStatus = 'S';
+        else if (status == 'Izin')
+          normalizedStatus = 'I';
+        else if (status == 'Alpha')
+          normalizedStatus = 'A';
+
+        absensiMap[siswaId] = normalizedStatus;
+      }
+
+      // Update isHadirSemua
+      if (absensiMap.isNotEmpty) {
+        isHadirSemua.value = absensiMap.values.every((v) => v == 'H');
+      }
+
+      absensiMap.refresh();
+    } catch (e) {
+      Get.snackbar('Error', 'Gagal memuat data jurnal: $e');
+    } finally {
+      isLoading.value = false;
+    }
   }
 
   Future<void> fetchSiswa() async {
@@ -66,9 +138,10 @@ class FormJurnalGuruController extends GetxController {
       siswaList.value = res;
       for (var s in res) {
         final id = s['id'] as int;
-        absensiMap[id] = null; // Default NOT selected
+        // Default to 'H' (Hadir) as per user request to optimize storage
+        absensiMap[id] = 'H';
       }
-      isHadirSemua.value = false;
+      isHadirSemua.value = true;
     } catch (e) {
       Get.snackbar('Error', 'Gagal memuat daftar siswa: $e');
     } finally {
@@ -117,7 +190,10 @@ class FormJurnalGuruController extends GetxController {
 
   Future<void> pickPhotos() async {
     final ImagePicker picker = ImagePicker();
-    final List<XFile> images = await picker.pickMultiImage();
+    final List<XFile> images = await picker.pickMultiImage(
+      imageQuality: 50,
+      maxWidth: 1080,
+    );
 
     if (images.isNotEmpty) {
       for (var img in images) {
@@ -130,6 +206,10 @@ class FormJurnalGuruController extends GetxController {
     selectedImages.removeAt(index);
   }
 
+  void removeExistingPhoto(int index) {
+    existingImagesUrl.removeAt(index);
+  }
+
   Future<void> simpanJurnal() async {
     if (materiController.text.isEmpty) {
       Get.snackbar('Peringatan', 'Materi tidak boleh kosong');
@@ -140,26 +220,12 @@ class FormJurnalGuruController extends GetxController {
       return;
     }
 
-    // Validation: make sure ALL students have a status
-    bool hasUnfilledAbsensi = absensiMap.values.any((status) => status == null);
-    if (hasUnfilledAbsensi) {
-      Get.snackbar(
-        'Peringatan',
-        'Absensi belum lengkap. Tolong pilih absensi (H/S/I/A) untuk setiap siswa atau tekan Mencentang "Hadir Semua".',
-        backgroundColor: Colors.orange,
-        colorText: Colors.white,
-      );
-      return;
-    }
-
     isLoading.value = true;
     try {
       final supabase = Supabase.instance.client;
 
-      // Upload images
+      // 1. Upload images
       List<String> uploadedUrls = [...existingImagesUrl];
-
-      // Upload new images
       for (var file in selectedImages) {
         final fileName =
             'jurnal_${DateTime.now().millisecondsSinceEpoch}_${file.path.split('/').last}';
@@ -167,22 +233,21 @@ class FormJurnalGuruController extends GetxController {
         final url = supabase.storage.from('jurnalimage').getPublicUrl(fileName);
         uploadedUrls.add(url);
       }
-
       String finalPhotoUrl = uploadedUrls.join(',');
 
-      // Determine all jadwal IDs in this group
+      // 2. Tentukan semua jadwal ID dalam grup ini
       List<int> allJadwalIds = [];
       if (groupedSchedules.isNotEmpty) {
-        allJadwalIds = groupedSchedules
-            .map<int>((s) => s['id'] as int)
-            .toList();
+        allJadwalIds = groupedSchedules.map<int>((s) => s['id'] as int).toList();
       } else {
         allJadwalIds = [schedule['id'] as int];
       }
 
-      // Insert or Update Jurnal
+      // 3. Simpan Jurnal untuk setiap jadwal_id
+      // Gunakan list untuk menampung ID jurnal yang baru dibuat/diupdate
+      List<int> savedJurnalIds = [];
+
       final jurnalData = {
-        'jadwal_id': allJadwalIds.first,
         'tanggal': DateFormat('yyyy-MM-dd').format(selectedTanggal.value),
         'materi': materiController.text,
         'catatan': catatanController.text,
@@ -190,59 +255,62 @@ class FormJurnalGuruController extends GetxController {
         'status': 'pending',
       };
 
-      PostgrestMap jurnalRes;
       if (isEdit && jurnalId != null) {
-        jurnalRes = await supabase
+        // Mode Edit (asumsi hanya satu jurnal yang diedit)
+        final res = await supabase
             .from('jurnal_harian')
-            .update(jurnalData)
+            .update({...jurnalData, 'jadwal_id': allJadwalIds.first})
             .eq('id', jurnalId!)
             .select()
             .single();
+        savedJurnalIds.add(res['id']);
       } else {
-        // For grouped schedules, link the first jadwal_id
-        jurnalRes = await supabase
-            .from('jurnal_harian')
-            .insert(jurnalData)
-            .select()
-            .single();
-
-        // If there are additional jadwal IDs in the group, create duplicate jurnal_harian entries
-        // pointing to the same data so all jadwal get marked as "filled"
-        for (int i = 1; i < allJadwalIds.length; i++) {
-          final extraData = Map<String, dynamic>.from(jurnalData);
-          extraData['jadwal_id'] = allJadwalIds[i];
-          await supabase.from('jurnal_harian').insert(extraData);
+        // Mode Baru (bisa berkelompok)
+        for (int jId in allJadwalIds) {
+          final res = await supabase
+              .from('jurnal_harian')
+              .insert({...jurnalData, 'jadwal_id': jId})
+              .select()
+              .single();
+          savedJurnalIds.add(res['id']);
         }
       }
 
-      final insertedJurnalId = jurnalRes['id'];
-
-      // Process absensi
+      // 4. Proses Presensi - HANYA status S, I, A yang disimpan
+      // Siswa yang Hadir (H) tidak perlu disimpan di database untuk menghemat payload dan storage
       List<Map<String, dynamic>> presensiList = [];
       final kelasId = schedule['kelas_id'];
+
       absensiMap.forEach((siswaId, status) {
-        presensiList.add({
-          'jurnal_id': insertedJurnalId,
-          'siswa_id': siswaId,
-          'status': status ?? 'H',
-          'kelas_id': kelasId,
-        });
+        // Normalisasi status dan hanya masukkan jika S, I, atau A
+        if (status != null && status != 'H' && status != 'Hadir') {
+          for (int sJurnalId in savedJurnalIds) {
+            presensiList.add({
+              'jurnal_id': sJurnalId,
+              'siswa_id': siswaId,
+              'status': status,
+              'kelas_id': kelasId,
+            });
+          }
+        }
       });
 
-      if (presensiList.isNotEmpty) {
-        // Clear old if edit
-        if (isEdit) {
+      // 5. Bersihkan data presensi lama jika sedang edit
+      if (isEdit) {
+        for (int sJurnalId in savedJurnalIds) {
           await supabase
               .from('presensi_siswa')
               .delete()
-              .eq('jurnal_id', insertedJurnalId);
+              .eq('jurnal_id', sJurnalId);
         }
+      }
+
+      // 6. Bulk Insert Presensi (jika ada yang tidak hadir)
+      if (presensiList.isNotEmpty) {
         await supabase.from('presensi_siswa').insert(presensiList);
       }
 
-      Get.back(
-        result: true,
-      ); // go back to schedule page and refresh inside controller
+      Get.back(result: true);
       Get.snackbar(
         'Sukses',
         'Jurnal berhasil disimpan',
@@ -334,6 +402,68 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (controller.isEdit && controller.jurnalStatus.value == 'rejected')
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.red.shade200),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.warning_amber_rounded, color: Colors.red.shade700, size: 20),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Jurnal ditolak, silahkan diperbarui',
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                  fontFamily: GoogleFonts.poppins().fontFamily,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Catatan Admin:',
+                            style: TextStyle(
+                              color: Colors.red.shade900,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              fontFamily: GoogleFonts.poppins().fontFamily,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.red.shade100),
+                            ),
+                            child: Text(
+                              controller.catatanAdmin.value.isEmpty 
+                                  ? 'Tidak ada catatan khusus dari admin.' 
+                                  : controller.catatanAdmin.value,
+                              style: TextStyle(
+                                color: Colors.red.shade800,
+                                fontSize: 13,
+                                height: 1.5,
+                                fontFamily: GoogleFonts.poppins().fontFamily,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  
                   _buildLabel('Tanggal'),
                   GestureDetector(
                     onTap: () => controller.pickDate(context),
@@ -563,54 +693,105 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
                     ],
                   ),
                   // Image grid
-                  if (controller.selectedImages.isNotEmpty)
-                    GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8,
+                  Obx(
+                    () => Column(
+                      children: [
+                        if (controller.existingImagesUrl.isNotEmpty ||
+                            controller.selectedImages.isNotEmpty)
+                          GridView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 3,
+                                  crossAxisSpacing: 8,
+                                  mainAxisSpacing: 8,
+                                ),
+                            itemCount:
+                                controller.existingImagesUrl.length +
+                                controller.selectedImages.length,
+                            itemBuilder: (context, index) {
+                              bool isExisting =
+                                  index < controller.existingImagesUrl.length;
+                              if (isExisting) {
+                                final url = controller.existingImagesUrl[index];
+                                return Stack(
+                                  children: [
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(8),
+                                        image: DecorationImage(
+                                          image: NetworkImage(url),
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      top: 2,
+                                      right: 2,
+                                      child: GestureDetector(
+                                        onTap: () => controller
+                                            .removeExistingPhoto(index),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(2),
+                                          decoration: const BoxDecoration(
+                                            color: Colors.black54,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.close,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              } else {
+                                final fileIndex =
+                                    index - controller.existingImagesUrl.length;
+                                final file =
+                                    controller.selectedImages[fileIndex];
+                                return Stack(
+                                  children: [
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(8),
+                                        image: DecorationImage(
+                                          image: FileImage(file),
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      top: 2,
+                                      right: 2,
+                                      child: GestureDetector(
+                                        onTap: () =>
+                                            controller.removePhoto(fileIndex),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(2),
+                                          decoration: const BoxDecoration(
+                                            color: Colors.black54,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.close,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }
+                            },
                           ),
-                      itemCount: controller.selectedImages.length,
-                      itemBuilder: (context, index) {
-                        return Stack(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(8),
-                                image: DecorationImage(
-                                  image: FileImage(
-                                    controller.selectedImages[index],
-                                  ),
-                                  fit: BoxFit.cover,
-                                ),
-                              ),
-                            ),
-                            Positioned(
-                              top: 2,
-                              right: 2,
-                              child: GestureDetector(
-                                onTap: () => controller.removePhoto(index),
-                                child: Container(
-                                  padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.black54,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(
-                                    Icons.close,
-                                    color: Colors.white,
-                                    size: 16,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
+                      ],
                     ),
+                  ),
 
                   const SizedBox(height: 100), // bottom padding for button
                 ],
