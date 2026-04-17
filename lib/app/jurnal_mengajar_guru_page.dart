@@ -35,7 +35,31 @@ class JurnalMengajarGuruController extends GetxController {
           .eq('jadwal_mengajar.guru_id', user.id)
           .eq('tanggal', dateStr);
 
-      journals.value = journalRes;
+      // Grouping Journals by (Kelas, Mapel, Materi, Tanggal)
+      Map<String, Map<String, dynamic>> groupedMap = {};
+
+      for (var j in journalRes) {
+        final jMap = Map<String, dynamic>.from(j);
+        final jadwal = jMap['jadwal_mengajar'];
+        String key =
+            "${jadwal['kelas_id']}_${jadwal['mata_pelajaran_id']}_${jMap['materi']}_${jMap['tanggal']}";
+
+        if (!groupedMap.containsKey(key)) {
+          groupedMap[key] = jMap;
+          groupedMap[key]!['grouped_jadwal'] = [jadwal];
+          groupedMap[key]!['grouped_jurnal_ids'] = [jMap['id']];
+        } else {
+          groupedMap[key]!['grouped_jadwal'].add(jadwal);
+          groupedMap[key]!['grouped_jurnal_ids'].add(jMap['id']);
+        }
+      }
+
+      // Sort grouped_jadwal by jam_id to ensure correct order
+      for (var group in groupedMap.values) {
+        (group['grouped_jadwal'] as List).sort((a, b) => (a['jam_id'] as int).compareTo(b['jam_id'] as int));
+      }
+
+      journals.value = groupedMap.values.toList();
     } catch (e) {
       print('Fetch Error: $e');
     } finally {
@@ -129,7 +153,10 @@ class JurnalMengajarGuruPage extends StatelessWidget {
   }
 
   void _handleCardTap(BuildContext context, Map jurnal, String status) {
-    if (status == 'validated' || status == 'approved' || status == 'disetujui' ) {
+    List<Map<String, dynamic>> groupedSchedules =
+        List<Map<String, dynamic>>.from(jurnal['grouped_jadwal'] ?? []);
+
+    if (status == 'validated' || status == 'approved' || status == 'disetujui') {
       Get.to(() => DetailJurnalMengajarGuruPage(jurnalId: jurnal['id']));
     } else if (status == 'rejected' || status == 'ditolak') {
       // Show rejection reason first then allow edit
@@ -142,26 +169,36 @@ class JurnalMengajarGuruPage extends StatelessWidget {
         buttonColor: Colors.orange,
         onConfirm: () {
           Get.back();
-          Get.to(() => FormJurnalMengajarGuruPage(
-            schedule: jurnal['jadwal_mengajar'],
-            isEdit: true,
-            jurnalId: jurnal['id'],
-          ))?.then((val) {
-             if (val == true) {
-               Get.find<JurnalMengajarGuruController>().fetchDataByDate(Get.find<JurnalMengajarGuruController>().selectedDate.value);
-             }
+          Get.to(
+            () => FormJurnalMengajarGuruPage(
+              schedule: Map<String, dynamic>.from(jurnal['jadwal_mengajar']),
+              groupedSchedules: groupedSchedules,
+              isEdit: true,
+              jurnalId: jurnal['id'],
+            ),
+          )?.then((val) {
+            if (val == true) {
+              Get.find<JurnalMengajarGuruController>().fetchDataByDate(
+                Get.find<JurnalMengajarGuruController>().selectedDate.value,
+              );
+            }
           });
-        }
+        },
       );
     } else {
-      Get.to(() => FormJurnalMengajarGuruPage(
-        schedule: jurnal['jadwal_mengajar'],
-        isEdit: true,
-        jurnalId: jurnal['id'],
-      ))?.then((val) {
-         if (val == true) {
-           Get.find<JurnalMengajarGuruController>().fetchDataByDate(Get.find<JurnalMengajarGuruController>().selectedDate.value);
-         }
+      Get.to(
+        () => FormJurnalMengajarGuruPage(
+          schedule: Map<String, dynamic>.from(jurnal['jadwal_mengajar']),
+          groupedSchedules: groupedSchedules,
+          isEdit: true,
+          jurnalId: jurnal['id'],
+        ),
+      )?.then((val) {
+        if (val == true) {
+          Get.find<JurnalMengajarGuruController>().fetchDataByDate(
+            Get.find<JurnalMengajarGuruController>().selectedDate.value,
+          );
+        }
       });
     }
   }

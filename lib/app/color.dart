@@ -14,4 +14,5 @@ class MainColor {
   static Color error = const Color(0xFFFF5963);
   static Color primaryText = const Color(0xFF14181B);
   static Color secondaryText = const Color(0xFF57636C);
+  static Color yellowError = const Color(0xFFFFF9E6);
 }

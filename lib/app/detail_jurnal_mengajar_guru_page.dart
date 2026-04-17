@@ -98,7 +98,7 @@ class DetailJurnalMengajarGuruPage extends StatelessWidget {
             ? DateFormat('dd MMMM yyyy', 'id_ID').format(DateTime.parse(data['tanggal'])) 
             : '-';
 
-        bool isVerified = (status == 'approved' || status == 'disetujui');
+        bool isVerified = (status == 'approved' || status == 'disetujui' || status == 'validated');
         bool isRejected = (status == 'rejected' || status == 'ditolak');
 
         // Parse presensi

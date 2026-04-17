@@ -12,7 +12,10 @@ class JadwalMengajarAdminController extends GetxController {
 
   var selectedDate = DateTime.now().obs;
   var schedules = [].obs;
-  var filteredSchedules = [].obs;
+  final RxList<List<Map<String, dynamic>>> groupedSchedules =
+      <List<Map<String, dynamic>>>[].obs;
+  final RxList<List<Map<String, dynamic>>> filteredSchedules =
+      <List<Map<String, dynamic>>>[].obs;
   var showBelumInputOnly = false.obs;
   var searchQuery = "".obs;
 
@@ -57,20 +60,53 @@ class JadwalMengajarAdminController extends GetxController {
           .eq('tanggal', dateStr)
           .order('jam_id', ascending: true);
 
-      schedules.assignAll(response);
+      // Fetch journal statuses for these schedules
+      final resJurnal = await supabase
+          .from('jurnal_harian')
+          .select('jadwal_id, status')
+          .eq('tanggal', dateStr);
+
+      final journalStatusMap = {
+        for (var j in resJurnal) (j['jadwal_id'] as int): (j['status'] as String),
+      };
+
+      List<Map<String, dynamic>> schedulesWithStatus = [];
+      for (var s in response) {
+        final sMap = Map<String, dynamic>.from(s);
+        sMap['jurnal_status'] = journalStatusMap[s['id']];
+        schedulesWithStatus.add(sMap);
+      }
+
+      schedules.assignAll(schedulesWithStatus);
 
       if (showBelumInputOnly.value) {
-        final resJurnal = await supabase
-            .from('jurnal_harian')
-            .select('jadwal_id')
-            .eq('tanggal', dateStr);
-        final filledJadwalIds = resJurnal.map((j) => j['jadwal_id']).toSet();
-
         schedules.value = schedules
-            .where((s) => !filledJadwalIds.contains(s['id']))
+            .where((s) => s['jurnal_status'] == null)
             .toList();
       }
 
+      // Group schedules by Guru, Kelas, and Mapel for the entire day
+      Map<String, List<Map<String, dynamic>>> groupedMap = {};
+      for (var s in schedules) {
+        String key =
+            "${s['guru_id']}_${s['kelas_id']}_${s['mata_pelajaran_id']}";
+        if (!groupedMap.containsKey(key)) {
+          groupedMap[key] = [];
+        }
+        groupedMap[key]!.add(s);
+      }
+
+      // Convert to list and sort by the earliest jam_id in each group
+      List<List<Map<String, dynamic>>> groups = groupedMap.values.toList();
+      groups.sort((a, b) {
+        int aMinJam =
+            a.map((e) => e['jam_id'] as int).reduce((curr, next) => curr < next ? curr : next);
+        int bMinJam =
+            b.map((e) => e['jam_id'] as int).reduce((curr, next) => curr < next ? curr : next);
+        return aMinJam.compareTo(bMinJam);
+      });
+
+      groupedSchedules.value = groups;
       filterLocal();
     } catch (e) {
       Get.snackbar('Error', e.toString());
@@ -81,11 +117,12 @@ class JadwalMengajarAdminController extends GetxController {
 
   void filterLocal() {
     if (searchQuery.isEmpty) {
-      filteredSchedules.assignAll(schedules);
+      filteredSchedules.assignAll(groupedSchedules);
     } else {
       final query = searchQuery.value.toLowerCase();
       filteredSchedules.assignAll(
-        schedules.where((s) {
+        groupedSchedules.where((group) {
+          final s = group.first;
           final guruName = (s['profiles']?['nama_lengkap'] ?? "")
               .toString()
               .toLowerCase();
@@ -96,8 +133,10 @@ class JadwalMengajarAdminController extends GetxController {
           final kelas = (s['master_kelas']?['nama_kelas'] ?? "")
               .toString()
               .toLowerCase();
-          final jam = (s['master_jam']?['jam_ke'] ?? "")
-              .toString()
+
+          final jam = group
+              .map((item) => item['master_jam']?['jam_ke']?.toString() ?? "")
+              .join(" ")
               .toLowerCase();
 
           return guruName.contains(query) ||
@@ -109,12 +148,12 @@ class JadwalMengajarAdminController extends GetxController {
     }
   }
 
-  Future<void> deleteJadwal(int id) async {
+  Future<void> deleteJadwalGroup(List<int> ids) async {
     isLoading.value = true;
     try {
-      await supabase.from('jadwal_mengajar').delete().eq('id', id);
+      await supabase.from('jadwal_mengajar').delete().inFilter('id', ids);
       await fetchDataByDate(selectedDate.value);
-      Get.back(); // Close dialog or form
+      Get.back(); // Close dialog
       Get.snackbar('Sukses', 'Jadwal berhasil dihapus');
     } catch (e) {
       Get.snackbar('Error', 'Gagal menghapus jadwal: $e');
@@ -195,21 +234,45 @@ class JadwalMengajarAdminPage extends StatelessWidget {
           ),
           Expanded(
             child: Obx(() {
-              if (controller.isLoading.value) {
+              if (controller.isLoading.value &&
+                  controller.groupedSchedules.isEmpty) {
                 return const Center(child: CircularProgressIndicator());
               }
 
               if (controller.filteredSchedules.isEmpty) {
-                return const Center(child: Text('Tidak ada jadwal ditemukan'));
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.event_busy,
+                        size: 64,
+                        color: Colors.grey.shade300,
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Tidak ada jadwal ditemukan',
+                        style: TextStyle(
+                          color: Colors.grey,
+                          fontFamily: GoogleFonts.poppins().fontFamily,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
               }
 
-              return ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: controller.filteredSchedules.length,
-                itemBuilder: (context, index) {
-                  final schedule = controller.filteredSchedules[index];
-                  return _buildScheduleCard(schedule, controller);
-                },
+              return RefreshIndicator(
+                onRefresh:
+                    () => controller.fetchDataByDate(controller.selectedDate.value),
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: controller.filteredSchedules.length,
+                  itemBuilder: (context, index) {
+                    final group = controller.filteredSchedules[index];
+                    return _buildScheduleCard(group, controller);
+                  },
+                ),
               );
             }),
           ),
@@ -328,41 +391,65 @@ class JadwalMengajarAdminPage extends StatelessWidget {
   }
 
   Widget _buildScheduleCard(
-    Map<String, dynamic> s,
+    List<Map<String, dynamic>> group,
     JadwalMengajarAdminController controller,
   ) {
+    final s = group.first;
     final Map jam = s['master_jam'] ?? {};
-    final String kelas = s['master_kelas'] != null
-        ? s['master_kelas']['nama_kelas']
-        : '-';
-    final String mapel = s['master_mata_pelajaran'] != null
-        ? s['master_mata_pelajaran']['nama_mata_pelajaran']
-        : '-';
-    final String timeRange = jam['waktu_reguler'] ?? '-';
+    final String kelas =
+        s['master_kelas'] != null ? s['master_kelas']['nama_kelas'] : '-';
+    final String mapel =
+        s['master_mata_pelajaran'] != null
+            ? s['master_mata_pelajaran']['nama_mata_pelajaran']
+            : '-';
+
+    // Group time and jam ke
+    String timeRange;
+    String jamKeLabel;
+    if (group.length > 1) {
+      String firstTime =
+          group.first['master_jam']['waktu_reguler']?.split('-')[0].trim() ?? '';
+      String lastTime =
+          group.last['master_jam']['waktu_reguler']?.split('-')[1].trim() ?? '';
+      timeRange = '$firstTime - $lastTime';
+      jamKeLabel =
+          'Jam ${group.map((s) => s['master_jam']['jam_ke'].toString()).join(', ')}';
+    } else {
+      timeRange = jam['waktu_reguler'] ?? '-';
+      jamKeLabel = 'Jam ${jam['jam_ke'] ?? '-'}';
+    }
+
     final Map guru = s['profiles'] ?? {};
     final String guruName = guru['nama_lengkap'] ?? '-';
-    final bool isActive = s['is_active'] == true;
+    // final bool isActive = s['is_active'] == true;
+
+    // Journal status logic
+    final bool isApproved = group.any((item) => item['jurnal_status'] == 'approved');
+    final bool hasJournal = group.any((item) => item['jurnal_status'] != null);
+
+    Color cardColor =
+        isApproved
+            ? Colors.grey.shade400 // Grey if approved
+            : MainColor.accentColor; // Blue if not yet approved or filled
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: MainColor.accentColor,
+        color: cardColor,
         borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 5,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
-          onTap: () {
-            Get.to(
-              () => FormJadwalPage(
-                date: DateTime.parse(s['tanggal']),
-                existingData: s.cast<String, dynamic>(),
-              ),
-            )?.then((_) {
-              controller.fetchDataByDate(controller.selectedDate.value);
-            });
-          },
+          onTap: () => checkAndEditJadwal(group, controller),
           child: Padding(
             padding: const EdgeInsets.all(12.0),
             child: Row(
@@ -396,9 +483,13 @@ class JadwalMengajarAdminPage extends StatelessWidget {
                             ),
                           ),
                           Icon(
-                            isActive ? Icons.check_circle : Icons.cancel,
-                            color: isActive ? Colors.white : Colors.redAccent,
-                            size: 18,
+                            isApproved
+                                ? Icons.check_circle_rounded
+                                : (hasJournal
+                                    ? Icons.pending_rounded
+                                    : Icons.more_time_rounded),
+                            color: Colors.white,
+                            size: 20,
                           ),
                         ],
                       ),
@@ -416,9 +507,9 @@ class JadwalMengajarAdminPage extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            kelas,
+                            "$kelas ($jamKeLabel)",
                             style: TextStyle(
-                              color: Colors.white70,
+                              color: Colors.white.withOpacity(0.85),
                               fontSize: 12,
                               fontFamily: GoogleFonts.poppins().fontFamily,
                             ),
@@ -426,7 +517,7 @@ class JadwalMengajarAdminPage extends StatelessWidget {
                           Text(
                             timeRange,
                             style: TextStyle(
-                              color: Colors.white70,
+                              color: Colors.white.withOpacity(0.85),
                               fontSize: 12,
                               fontFamily: GoogleFonts.poppins().fontFamily,
                             ),
@@ -442,6 +533,51 @@ class JadwalMengajarAdminPage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  void checkAndEditJadwal(
+    List<Map<String, dynamic>> group,
+    JadwalMengajarAdminController controller,
+  ) async {
+    controller.isLoading.value = true;
+    try {
+      // Collect all schedule IDs in this group
+      final scheduleIds = group.map((s) => s['id']).toList();
+
+      // Check if any of these schedules exist in jurnal_harian
+      final journalCheck = await Supabase.instance.client
+          .from('jurnal_harian')
+          .select('id')
+          .inFilter('jadwal_id', scheduleIds)
+          .limit(1);
+
+      bool isReadOnly = journalCheck.isNotEmpty;
+
+      // Edit map
+      final Map<String, dynamic> combinedData = Map<String, dynamic>.from(
+        group.first,
+      );
+      combinedData['group_jam_ids'] = group
+          .map((s) => s['jam_id'] as int)
+          .toList();
+      combinedData['group_schedule_ids'] = group
+          .map((s) => s['id'] as int)
+          .toList();
+
+      Get.to(
+        () => FormJadwalPage(
+          date: DateTime.parse(combinedData['tanggal']),
+          existingData: combinedData.cast<String, dynamic>(),
+          readOnly: isReadOnly,
+        ),
+      )?.then((_) {
+        controller.fetchDataByDate(controller.selectedDate.value);
+      });
+    } catch (e) {
+      Get.snackbar('Error', 'Gagal memverifikasi jurnal: $e');
+    } finally {
+      controller.isLoading.value = false;
+    }
   }
 }
 
@@ -503,7 +639,12 @@ class FormJadwalController extends GetxController {
           .eq('kelas_id', selectedKelasId.value!);
 
       if (existingData != null) {
-        query = query.neq('id', existingData!['id']);
+        if (existingData!.containsKey('group_schedule_ids')) {
+          List<dynamic> ids = existingData!['group_schedule_ids'];
+          query = query.not('id', 'in', '(${ids.join(',')})');
+        } else {
+          query = query.neq('id', existingData!['id']);
+        }
       }
 
       final response = await query;
@@ -519,7 +660,7 @@ class FormJadwalController extends GetxController {
       final resPeriode = await supabase
           .from('master_periode')
           .select()
-          .eq('is_active', true);
+          .order('is_active', ascending: false);
       periodeList.value = resPeriode;
 
       final resJam = await supabase
@@ -558,20 +699,43 @@ class FormJadwalController extends GetxController {
       // Populate existing data if Editing
       if (existingData != null) {
         selectedPeriodeId.value = existingData!['periode_id'];
-        selectedJamIds.assign(existingData!['jam_id']);
+        if (existingData!.containsKey('group_jam_ids')) {
+          selectedJamIds.assignAll(
+            List<int>.from(existingData!['group_jam_ids']),
+          );
+        } else {
+          selectedJamIds.assign(existingData!['jam_id']);
+        }
         selectedKelasId.value = existingData!['kelas_id'];
         selectedMapelId.value = existingData!['mata_pelajaran_id'];
         selectedGuruId.value = existingData!['guru_id'];
-        isActive.value = existingData!['is_active'] ?? true;
+        // Handle boolean from database safely
+        final rawActive = existingData!['is_active'];
+        if (rawActive is bool) {
+          isActive.value = rawActive;
+        } else if (rawActive is int) {
+          isActive.value = rawActive == 1;
+        } else if (rawActive is String) {
+          isActive.value = rawActive.toLowerCase() == 'true';
+        } else {
+          isActive.value = true;
+        }
       } else {
-        // Just adding: load from settings
+        // Just adding: load active periode
+        if (selectedPeriodeId.value == null && resPeriode.isNotEmpty) {
+          // Look for the first one that is_active
+          final activeP = resPeriode.firstWhere(
+            (p) => p['is_active'] == true,
+            orElse: () => resPeriode.first,
+          );
+          selectedPeriodeId.value = activeP['id'];
+        }
+
         final prefs = await SharedPreferences.getInstance();
         final savedPeriode = prefs.getInt('active_periode_id');
         if (savedPeriode != null &&
             resPeriode.any((p) => p['id'] == savedPeriode)) {
           selectedPeriodeId.value = savedPeriode;
-        } else if (resPeriode.isNotEmpty) {
-          selectedPeriodeId.value = resPeriode.first['id'];
         }
       }
     } catch (e) {
@@ -618,22 +782,45 @@ class FormJadwalController extends GetxController {
         }
         await supabase.from('jadwal_mengajar').insert(batchData);
       } else {
-        // Edit mode: only update this specific ID
-        final data = {
-          'guru_id': selectedGuruId.value,
-          'periode_id': selectedPeriodeId.value,
-          'kelas_id': selectedKelasId.value,
-          'mata_pelajaran_id': selectedMapelId.value,
-          'hari': selectedDate.value.weekday % 7,
-          'tanggal': DateFormat('yyyy-MM-dd').format(selectedDate.value),
-          'jam_id':
-              selectedJamIds.first, // In edit mode we only allow 1 jam update
-          'is_active': isActive.value,
-        };
-        await supabase
-            .from('jadwal_mengajar')
-            .update(data)
-            .eq('id', existingData!['id']);
+        // Edit mode:
+        // Due to grouping logic, editing could mean modifying single or multiple schedules at once.
+        // It's safer to delete the old group based on `existingData!['group_schedule_ids']` and insert new ones
+        // or iterate through new and old to update/insert/delete.
+        // Strategy: delete all schedules in `group_schedule_ids`, then insert `selectedJamIds`.
+
+        List<int> oldScheduleIds = [];
+        if (existingData!.containsKey('group_schedule_ids')) {
+          oldScheduleIds = List<int>.from(existingData!['group_schedule_ids']);
+        } else {
+          oldScheduleIds = [existingData!['id']];
+        }
+
+        // Delete old schedules
+        if (oldScheduleIds.isNotEmpty) {
+          await supabase
+              .from('jadwal_mengajar')
+              .delete()
+              .inFilter('id', oldScheduleIds);
+        }
+
+        // Insert new schedules
+        List<Map<String, dynamic>> updateBatch = [];
+        for (var jamId in selectedJamIds) {
+          updateBatch.add({
+            'guru_id': selectedGuruId.value,
+            'periode_id': selectedPeriodeId.value,
+            'kelas_id': selectedKelasId.value,
+            'mata_pelajaran_id': selectedMapelId.value,
+            'hari': selectedDate.value.weekday % 7,
+            'tanggal': DateFormat('yyyy-MM-dd').format(selectedDate.value),
+            'jam_id': jamId,
+            'is_active': isActive.value,
+          });
+        }
+
+        if (updateBatch.isNotEmpty) {
+          await supabase.from('jadwal_mengajar').insert(updateBatch);
+        }
       }
 
       Get.back();
@@ -654,8 +841,14 @@ class FormJadwalController extends GetxController {
 class FormJadwalPage extends StatelessWidget {
   final DateTime date;
   final Map<String, dynamic>? existingData;
+  final bool readOnly;
 
-  const FormJadwalPage({super.key, required this.date, this.existingData});
+  const FormJadwalPage({
+    super.key,
+    required this.date,
+    this.existingData,
+    this.readOnly = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -677,7 +870,7 @@ class FormJadwalPage extends StatelessWidget {
         backgroundColor: MainColor.primaryColor,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
-          if (isEdit)
+          if (isEdit && (readOnly != true))
             IconButton(
               icon: const Icon(Icons.delete, color: Colors.white),
               onPressed: () {
@@ -690,7 +883,16 @@ class FormJadwalPage extends StatelessWidget {
                   onConfirm: () {
                     final adminController =
                         Get.find<JadwalMengajarAdminController>();
-                    adminController.deleteJadwal(existingData!['id']);
+                    List<int> ids = [];
+                    if (existingData!.containsKey('group_schedule_ids')) {
+                      ids = List<int>.from(existingData!['group_schedule_ids']);
+                    } else if (existingData!.containsKey('id')) {
+                      ids = [existingData!['id'] as int];
+                    }
+
+                    if (ids.isNotEmpty) {
+                      adminController.deleteJadwalGroup(ids);
+                    }
                   },
                 );
               },
@@ -708,13 +910,15 @@ class FormJadwalPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildLabel('Periode'),
-              _buildDropdown(
+              _buildDropdown<int>(
                 value: controller.selectedPeriodeId.value,
                 hint: 'Pilih Periode',
                 items: controller.periodeList,
                 valueKey: 'id',
                 displayKey: 'nama_periode',
-                onChanged: (val) => controller.selectedPeriodeId.value = val,
+                onChanged: (readOnly == true || isEdit)
+                    ? null
+                    : (val) => controller.selectedPeriodeId.value = val,
               ),
               const SizedBox(height: 16),
 
@@ -726,25 +930,34 @@ class FormJadwalPage extends StatelessWidget {
                       children: [
                         _buildLabel('Tanggal'),
                         GestureDetector(
-                          onTap: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: controller.selectedDate.value,
-                              firstDate: DateTime(2020),
-                              lastDate: DateTime(2100),
-                            );
-                            if (picked != null) {
-                              controller.selectedDate.value = picked;
-                            }
-                          },
+                          onTap: (readOnly == true || isEdit)
+                              ? null
+                              : () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: controller.selectedDate.value,
+                                    firstDate: DateTime(2020),
+                                    lastDate: DateTime(2100),
+                                  );
+                                  if (picked != null) {
+                                    controller.selectedDate.value = picked;
+                                  }
+                                },
                           child: Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
                               vertical: 14,
                             ),
                             decoration: BoxDecoration(
-                              color: MainColor.primaryBackground,
+                              color: (readOnly == true || isEdit)
+                                  ? Colors.grey.shade100
+                                  : MainColor.primaryBackground,
                               borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: (readOnly == true || isEdit)
+                                    ? Colors.grey.shade300
+                                    : Colors.transparent,
+                              ),
                             ),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -755,13 +968,18 @@ class FormJadwalPage extends StatelessWidget {
                                     'id_ID',
                                   ).format(controller.selectedDate.value),
                                   style: TextStyle(
+                                    color: (readOnly == true || isEdit)
+                                        ? Colors.grey
+                                        : Colors.black,
                                     fontFamily:
                                         GoogleFonts.poppins().fontFamily,
                                   ),
                                 ),
-                                const Icon(
+                                Icon(
                                   Icons.calendar_today,
-                                  color: Colors.grey,
+                                  color: (readOnly == true || isEdit)
+                                      ? Colors.grey.shade400
+                                      : Colors.grey,
                                   size: 20,
                                 ),
                               ],
@@ -777,15 +995,17 @@ class FormJadwalPage extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildLabel('Kelas'),
-                        _buildDropdown(
+                        _buildDropdown<int>(
                           value: controller.selectedKelasId.value,
                           hint: 'Pilih Kelas',
                           items: controller.kelasList,
                           valueKey: 'id',
                           displayKey: 'nama_kelas',
-                          onChanged: (val) {
-                            controller.selectedKelasId.value = val;
-                          },
+                          onChanged: (readOnly == true || isEdit)
+                              ? null
+                              : (val) {
+                                  controller.selectedKelasId.value = val;
+                                },
                         ),
                       ],
                     ),
@@ -812,17 +1032,13 @@ class FormJadwalPage extends StatelessWidget {
                         return FilterChip(
                           label: Text(j['jam_ke'].toString()),
                           selected: isSelected,
-                          onSelected: isBooked
+                          onSelected: (isBooked || (readOnly == true))
                               ? null
                               : (val) {
-                                  if (isEdit) {
-                                    controller.selectedJamIds.assign(id);
+                                  if (val) {
+                                    controller.selectedJamIds.add(id);
                                   } else {
-                                    if (val) {
-                                      controller.selectedJamIds.add(id);
-                                    } else {
-                                      controller.selectedJamIds.remove(id);
-                                    }
+                                    controller.selectedJamIds.remove(id);
                                   }
                                 },
                           disabledColor: Colors.grey.withOpacity(0.1),
@@ -853,24 +1069,28 @@ class FormJadwalPage extends StatelessWidget {
               const SizedBox(height: 16),
 
               _buildLabel('Pelajaran'),
-              _buildDropdown(
+              _buildDropdown<int>(
                 value: controller.selectedMapelId.value,
                 hint: 'Pilih Pelajaran',
                 items: controller.mapelList,
                 valueKey: 'id',
                 displayKey: 'nama_mata_pelajaran',
-                onChanged: (val) => controller.selectedMapelId.value = val,
+                onChanged: (readOnly == true)
+                    ? null
+                    : (val) => controller.selectedMapelId.value = val,
               ),
               const SizedBox(height: 16),
 
               _buildLabel('Guru'),
-              _buildDropdown(
+              _buildDropdown<String>(
                 value: controller.selectedGuruId.value,
                 hint: 'Pilih Guru',
                 items: controller.guruList,
                 valueKey: 'id',
                 displayKey: 'nama_lengkap',
-                onChanged: (val) => controller.selectedGuruId.value = val,
+                onChanged: (readOnly == true)
+                    ? null
+                    : (val) => controller.selectedGuruId.value = val,
               ),
               const SizedBox(height: 16),
 
@@ -881,7 +1101,9 @@ class FormJadwalPage extends StatelessWidget {
                   Checkbox(
                     value: controller.isActive.value,
                     activeColor: MainColor.primaryColor,
-                    onChanged: (val) => controller.isActive.value = val ?? true,
+                    onChanged: (readOnly == true)
+                        ? null
+                        : (val) => controller.isActive.value = val ?? true,
                   ),
                   Text(
                     'Aktif',
@@ -953,29 +1175,31 @@ class FormJadwalPage extends StatelessWidget {
                 ),
               ],
 
-              const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: MainColor.accentColor,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
+              if (readOnly != true) ...[
+                const SizedBox(height: 32),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: MainColor.accentColor,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
+                      ),
                     ),
-                  ),
-                  onPressed: controller.saveJadwal,
-                  child: Text(
-                    'Simpan',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: GoogleFonts.poppins().fontFamily,
+                    onPressed: controller.saveJadwal,
+                    child: Text(
+                      'Simpan',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: GoogleFonts.poppins().fontFamily,
+                      ),
                     ),
                   ),
                 ),
-              ),
+              ],
             ],
           ),
         );
@@ -1003,7 +1227,7 @@ class FormJadwalPage extends StatelessWidget {
     required List items,
     required String valueKey,
     required String displayKey,
-    required Function(T?) onChanged,
+    required Function(T?)? onChanged,
   }) {
     // Make sure we handle mismatch where items might not contain the value due to dynamic lists or deletion
     bool valueExists = items.any((element) => element[valueKey] == value);

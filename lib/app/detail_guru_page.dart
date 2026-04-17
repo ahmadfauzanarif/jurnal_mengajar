@@ -4,15 +4,19 @@ import 'package:intl/intl.dart';
 import 'package:jurnal_mengajar/app/color.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:get/get.dart';
+import 'package:jurnal_mengajar/app/jadwal_mengajar_admin_page.dart';
 
 class DetailGuruController extends GetxController {
   final String guruId;
   final supabase = Supabase.instance.client;
 
   var isLoading = false.obs;
+  var isListLoading = false.obs;
   var guruProfile = {}.obs;
   var selectedDate = DateTime.now().obs;
   var schedules = [].obs;
+  final RxList<List<Map<String, dynamic>>> groupedSchedules =
+      <List<Map<String, dynamic>>>[].obs;
   var journals = [].obs;
 
   DetailGuruController(this.guruId);
@@ -46,8 +50,10 @@ class DetailGuruController extends GetxController {
   Future<void> fetchDataByDate(DateTime date) async {
     selectedDate.value = date;
     final dateStr = DateFormat('yyyy-MM-dd').format(date);
+    isListLoading.value = true;
 
     try {
+      // Fetch Schedule including journal status
       // Fetch Schedule including journal status
       final scheduleRes = await supabase
           .from('jadwal_mengajar')
@@ -56,8 +62,32 @@ class DetailGuruController extends GetxController {
           )
           .eq('guru_id', guruId)
           .eq('tanggal', dateStr)
-          .eq('is_active', true);
+          .eq('is_active', true)
+          .order('jam_id', ascending: true);
       schedules.value = scheduleRes;
+
+      // Group schedules by Kelas and Mapel for entire day (guru_id is already filtered)
+      Map<String, List<Map<String, dynamic>>> groupedMap = {};
+      for (var s in scheduleRes) {
+        final sMap = Map<String, dynamic>.from(s);
+        String key = "${sMap['kelas_id']}_${sMap['mata_pelajaran_id']}";
+        if (!groupedMap.containsKey(key)) {
+          groupedMap[key] = [];
+        }
+        groupedMap[key]!.add(sMap);
+      }
+
+      // Convert to list and sort by the earliest jam_id in each group
+      List<List<Map<String, dynamic>>> groups = groupedMap.values.toList();
+      groups.sort((a, b) {
+        int aMinJam =
+            a.map((e) => e['jam_id'] as int).reduce((curr, next) => curr < next ? curr : next);
+        int bMinJam =
+            b.map((e) => e['jam_id'] as int).reduce((curr, next) => curr < next ? curr : next);
+        return aMinJam.compareTo(bMinJam);
+      });
+
+      groupedSchedules.value = groups;
 
       // Fetch Journals including attendance
       final journalRes = await supabase
@@ -68,9 +98,43 @@ class DetailGuruController extends GetxController {
           .eq('jadwal.guru_id', guruId)
           .eq('tanggal', dateStr);
 
-      journals.value = journalRes;
+      // Grouping Journals for Detail Guru view
+      List<Map<String, dynamic>> distinctJournals = [];
+      for (var j in journalRes) {
+        final jMap = Map<String, dynamic>.from(j);
+        final jadwal = jMap['jadwal'];
+
+        bool isDuplicate = false;
+        for (var existing in distinctJournals) {
+          final existingJadwal = existing['jadwal'];
+          // Group by Guru, Kelas, Mapel, Materi, Tanggal
+          if (existingJadwal['guru_id'] == jadwal['guru_id'] &&
+              existingJadwal['kelas_id'] == jadwal['kelas_id'] &&
+              existingJadwal['mata_pelajaran_id'] ==
+                  jadwal['mata_pelajaran_id'] &&
+              existing['materi'] == jMap['materi'] &&
+              existing['tanggal'] == jMap['tanggal']) {
+            isDuplicate = true;
+            // Add ID to group
+            if (existing['group_ids'] == null) {
+              existing['group_ids'] = [existing['id']];
+            }
+            existing['group_ids'].add(jMap['id']);
+            break;
+          }
+        }
+
+        if (!isDuplicate) {
+          jMap['group_ids'] = [jMap['id']];
+          distinctJournals.add(jMap);
+        }
+      }
+
+      journals.value = distinctJournals;
     } catch (e) {
       print('Fetch Error: $e');
+    } finally {
+      isListLoading.value = false;
     }
   }
 
@@ -79,7 +143,7 @@ class DetailGuruController extends GetxController {
   }
 
   Future<void> validateJurnal(
-    int id,
+    List<int> ids,
     String status, {
     String? catatanAdmin,
   }) async {
@@ -94,7 +158,7 @@ class DetailGuruController extends GetxController {
             'validated_at': DateTime.now().toIso8601String(),
             'catatan_admin': catatanAdmin,
           })
-          .eq('id', id);
+          .filter('id', 'in', ids);
 
       await fetchDataByDate(selectedDate.value);
       Get.snackbar('Berhasil', 'Status jurnal diperbarui menjadi $status');
@@ -192,15 +256,15 @@ class DetailGuruPage extends StatelessWidget {
               fontFamily: GoogleFonts.poppins().fontFamily,
             ),
           ),
-          Text(
-            DateFormat('MMMM yyyy', 'id_ID').format(DateTime.now()),
-            style: TextStyle(
-              fontStyle: FontStyle.italic,
-              fontSize: 14,
-              color: Colors.grey,
-              fontFamily: GoogleFonts.poppins().fontFamily,
-            ),
-          ),
+          // Text(
+          //   DateFormat('MMMM yyyy', 'id_ID').format(DateTime.now()),
+          //   style: TextStyle(
+          //     fontStyle: FontStyle.italic,
+          //     fontSize: 14,
+          //     color: Colors.grey,
+          //     fontFamily: GoogleFonts.poppins().fontFamily,
+          //   ),
+          // ),
           const SizedBox(height: 16),
           _buildInfoRow(Icons.phone, profile['no_telp'] ?? '-'),
           _buildInfoRow(Icons.email, profile['email'] ?? '-'),
@@ -359,16 +423,26 @@ class DetailGuruPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          if (controller.schedules.isEmpty)
-            const Text('Tidak ada jadwal hari ini')
-          else
-            ...controller.schedules.map(
-              (s) => _buildScheduleCard(
-                context,
-                s as Map<String, dynamic>,
-                controller,
-              ),
-            ),
+          Obx(() {
+            if (controller.isListLoading.value) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20.0),
+                  child: CircularProgressIndicator(),
+                ),
+              );
+            }
+            if (controller.groupedSchedules.isEmpty) {
+              return const Text('Tidak ada jadwal hari ini');
+            }
+            return Column(
+              children: controller.groupedSchedules
+                  .map(
+                    (group) => _buildScheduleCard(context, group, controller),
+                  )
+                  .toList(),
+            );
+          }),
         ],
       ),
     );
@@ -376,9 +450,10 @@ class DetailGuruPage extends StatelessWidget {
 
   Widget _buildScheduleCard(
     BuildContext context,
-    Map<String, dynamic> s,
+    List<Map<String, dynamic>> group,
     DetailGuruController controller,
   ) {
+    final s = group.first;
     final jam = s['master_jam'] ?? {};
     final kelas = s['master_kelas'] != null
         ? s['master_kelas']['nama_kelas']
@@ -386,12 +461,28 @@ class DetailGuruPage extends StatelessWidget {
     final mapel = s['master_mata_pelajaran'] != null
         ? s['master_mata_pelajaran']['nama_mata_pelajaran']
         : '-';
+
+    // Group time and jam ke
+    String timeRange;
+    String jamKeLabel;
+    if (group.length > 1) {
+      String firstTime =
+          group.first['master_jam']['waktu_reguler']?.split('-')[0].trim() ??
+          '';
+      String lastTime =
+          group.last['master_jam']['waktu_reguler']?.split('-')[1].trim() ?? '';
+      timeRange = '$firstTime - $lastTime';
+      jamKeLabel =
+          'Jam ${group.map((s) => s['master_jam']['jam_ke'].toString()).join(', ')}';
+    } else {
+      timeRange = jam['waktu_reguler'] ?? '-';
+      jamKeLabel = 'Jam ${jam['jam_ke'] ?? '-'}';
+    }
+
     final journals = s['jurnal_harian'] as List? ?? [];
     final hasJournal = journals.isNotEmpty;
     final journalData = hasJournal ? journals[0] : null;
     final journalStatus = journalData != null ? journalData['status'] : null;
-
-    String timeRange = jam['waktu_reguler'] ?? '-';
 
     Color bgColor = MainColor.secondaryColor;
     Color textColor = Colors.white;
@@ -415,27 +506,22 @@ class DetailGuruPage extends StatelessWidget {
       ),
       child: ListTile(
         onTap: () {
-          if (hasJournal) {
-            // Find full journal data from journals list or fetch it
-            final j =
-                controller.journals.firstWhereOrNull(
-                      (j) => j['id'] == journalData['id'],
-                    )
-                    as Map<String, dynamic>?;
-            if (j != null) {
-              _showDetailSheet(context, j, controller);
-            } else {
-              Get.snackbar(
-                'Info',
-                'Mohon tunggu, sedang memuat detail jurnal...',
-              );
-            }
-          } else {
-            Get.snackbar('Info', 'Guru belum mengisi jurnal untuk jadwal ini.');
-          }
+          final Map<String, dynamic> combinedData = Map<String,dynamic>.from(group.first);
+          combinedData['group_jam_ids'] = group.map((item) => item['jam_id'] as int).toList();
+          combinedData['group_schedule_ids'] = group.map((item) => item['id'] as int).toList();
+
+          Get.to(
+            () => FormJadwalPage(
+              date: DateTime.parse(combinedData['tanggal']),
+              existingData: combinedData.cast<String, dynamic>(),
+              readOnly: hasJournal,
+            ),
+          )?.then((_) {
+            controller.fetchDataByDate(controller.selectedDate.value);
+          });
         },
         title: Text(
-          '$timeRange   $kelas',
+          '$timeRange   $kelas ($jamKeLabel)',
           style: TextStyle(color: textColor, fontWeight: FontWeight.bold),
         ),
         subtitle: Text(
@@ -465,16 +551,30 @@ class DetailGuruPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          if (controller.journals.isEmpty)
-            const Text('Belum ada jurnal hari ini')
-          else
-            ...controller.journals.map(
-              (j) => _buildJournalCard(
-                context,
-                j as Map<String, dynamic>,
-                controller,
-              ),
-            ),
+          Obx(() {
+            if (controller.isListLoading.value) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20.0),
+                  child: CircularProgressIndicator(),
+                ),
+              );
+            }
+            if (controller.journals.isEmpty) {
+              return const Text('Belum ada jurnal hari ini');
+            }
+            return Column(
+              children: controller.journals
+                  .map(
+                    (j) => _buildJournalCard(
+                      context,
+                      j as Map<String, dynamic>,
+                      controller,
+                    ),
+                  )
+                  .toList(),
+            );
+          }),
         ],
       ),
     );
@@ -613,7 +713,12 @@ class DetailGuruPage extends StatelessWidget {
             color: Colors.white,
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.only(
+            left: 24,
+            right: 24,
+            top: 24,
+            bottom: 24 + MediaQuery.of(context).viewInsets.bottom,
+          ),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -797,7 +902,7 @@ class DetailGuruPage extends StatelessWidget {
                             }
                             Get.back();
                             controller.validateJurnal(
-                              j['id'],
+                              List<int>.from(j['group_ids'] ?? [j['id']]),
                               'rejected',
                               catatanAdmin: rejectNoteController.text,
                             );
@@ -822,7 +927,7 @@ class DetailGuruPage extends StatelessWidget {
                           onPressed: () {
                             Get.back();
                             controller.validateJurnal(
-                              j['id'],
+                              List<int>.from(j['group_ids'] ?? [j['id']]),
                               'approved',
                               catatanAdmin: rejectNoteController.text,
                             );

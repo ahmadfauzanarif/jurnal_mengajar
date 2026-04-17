@@ -1,11 +1,15 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:jurnal_mengajar/app/color.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
 
 class FormJurnalGuruController extends GetxController {
   final supabase = Supabase.instance.client;
@@ -75,7 +79,7 @@ class FormJurnalGuruController extends GetxController {
       catatanController.text = res['catatan'] ?? '';
       jurnalStatus.value = res['status'] ?? 'pending';
       catatanAdmin.value = res['catatan_admin'] ?? '';
-      
+
       if (res['tanggal'] != null) {
         selectedTanggal.value = DateTime.parse(res['tanggal']);
       }
@@ -190,15 +194,14 @@ class FormJurnalGuruController extends GetxController {
 
   Future<void> pickPhotos() async {
     final ImagePicker picker = ImagePicker();
-    final List<XFile> images = await picker.pickMultiImage(
+    final XFile? image = await picker.pickImage(
+      source: ImageSource.camera,
       imageQuality: 50,
       maxWidth: 1080,
     );
 
-    if (images.isNotEmpty) {
-      for (var img in images) {
-        selectedImages.add(File(img.path));
-      }
+    if (image != null) {
+      selectedImages.add(File(image.path));
     }
   }
 
@@ -235,18 +238,6 @@ class FormJurnalGuruController extends GetxController {
       }
       String finalPhotoUrl = uploadedUrls.join(',');
 
-      // 2. Tentukan semua jadwal ID dalam grup ini
-      List<int> allJadwalIds = [];
-      if (groupedSchedules.isNotEmpty) {
-        allJadwalIds = groupedSchedules.map<int>((s) => s['id'] as int).toList();
-      } else {
-        allJadwalIds = [schedule['id'] as int];
-      }
-
-      // 3. Simpan Jurnal untuk setiap jadwal_id
-      // Gunakan list untuk menampung ID jurnal yang baru dibuat/diupdate
-      List<int> savedJurnalIds = [];
-
       final jurnalData = {
         'tanggal': DateFormat('yyyy-MM-dd').format(selectedTanggal.value),
         'materi': materiController.text,
@@ -255,17 +246,78 @@ class FormJurnalGuruController extends GetxController {
         'status': 'pending',
       };
 
+      List<int> savedJurnalIds = [];
+
       if (isEdit && jurnalId != null) {
-        // Mode Edit (asumsi hanya satu jurnal yang diedit)
-        final res = await supabase
+        // === MODE EDIT ===
+        // Cari jurnal asli untuk mendapatkan info jadwal
+        final originalJurnal = await supabase
             .from('jurnal_harian')
-            .update({...jurnalData, 'jadwal_id': allJadwalIds.first})
+            .select(
+              'id, jadwal_id, tanggal, jadwal_mengajar!inner(guru_id, kelas_id, mata_pelajaran_id, tanggal)',
+            )
             .eq('id', jurnalId!)
-            .select()
             .single();
-        savedJurnalIds.add(res['id']);
+
+        final jadwalInfo = originalJurnal['jadwal_mengajar'];
+        final guruId = jadwalInfo['guru_id'];
+        final kelasId2 = jadwalInfo['kelas_id'];
+        final mapelId = jadwalInfo['mata_pelajaran_id'];
+        final tanggalJadwal = jadwalInfo['tanggal'];
+
+        // Step 1: Cari semua jadwal_mengajar yang cocok (guru, kelas, mapel, tanggal sama)
+        final matchingJadwal = await supabase
+            .from('jadwal_mengajar')
+            .select('id')
+            .eq('guru_id', guruId)
+            .eq('kelas_id', kelasId2)
+            .eq('mata_pelajaran_id', mapelId)
+            .eq('tanggal', tanggalJadwal);
+
+        List<int> matchingJadwalIds = matchingJadwal
+            .map<int>((j) => j['id'] as int)
+            .toList();
+
+        // Step 2: Cari semua jurnal_harian yang terhubung ke jadwal-jadwal tersebut
+        List<int> siblingIds = [];
+        if (matchingJadwalIds.isNotEmpty) {
+          final siblingJournals = await supabase
+              .from('jurnal_harian')
+              .select('id')
+              .inFilter('jadwal_id', matchingJadwalIds)
+              .eq('tanggal', originalJurnal['tanggal']);
+
+          for (var sj in siblingJournals) {
+            siblingIds.add(sj['id'] as int);
+          }
+        }
+
+        // Jika tidak ditemukan sibling, minimal update jurnal yang diketahui
+        if (siblingIds.isEmpty) {
+          siblingIds = [jurnalId!];
+        }
+
+        // Update SEMUA jurnal saudara sekaligus
+        for (int sjId in siblingIds) {
+          final res = await supabase
+              .from('jurnal_harian')
+              .update(jurnalData)
+              .eq('id', sjId)
+              .select()
+              .single();
+          savedJurnalIds.add(res['id']);
+        }
       } else {
-        // Mode Baru (bisa berkelompok)
+        // === MODE BARU (INSERT) ===
+        List<int> allJadwalIds = [];
+        if (groupedSchedules.isNotEmpty) {
+          allJadwalIds = groupedSchedules
+              .map<int>((s) => s['id'] as int)
+              .toList();
+        } else {
+          allJadwalIds = [schedule['id'] as int];
+        }
+
         for (int jId in allJadwalIds) {
           final res = await supabase
               .from('jurnal_harian')
@@ -308,6 +360,9 @@ class FormJurnalGuruController extends GetxController {
       // 6. Bulk Insert Presensi (jika ada yang tidak hadir)
       if (presensiList.isNotEmpty) {
         await supabase.from('presensi_siswa').insert(presensiList);
+
+        // 7. Kirim Notifikasi WhatsApp ke Orang Tua
+        _sendWhatsappNotifications();
       }
 
       Get.back(result: true);
@@ -321,6 +376,108 @@ class FormJurnalGuruController extends GetxController {
       Get.snackbar('Error', 'Gagal menyimpan jurnal: $e');
     } finally {
       isLoading.value = false;
+    }
+  }
+
+  Future<void> _sendWhatsappNotifications() async {
+    final token = dotenv.env['NOBOXAI_TOKEN'];
+    if (token == null || token.isEmpty) {
+      debugPrint(
+        'WhatsApp notification skipped: NOBOXAI_TOKEN not found in .env',
+      );
+      return;
+    }
+
+    // Ambil info jam dan mapel
+    String jamKeStr;
+    if (groupedSchedules.isNotEmpty) {
+      jamKeStr = groupedSchedules
+          .map((s) => s['master_jam']['jam_ke'].toString())
+          .join(', ');
+    } else {
+      jamKeStr = schedule['master_jam']['jam_ke'].toString();
+    }
+    final mapelStr =
+        schedule['master_mata_pelajaran']['nama_mata_pelajaran'] ?? '';
+    final tanggalStr = DateFormat(
+      'dd MMMM yyyy',
+      'id_ID',
+    ).format(selectedTanggal.value);
+
+    int countSent = 0;
+
+    for (var siswa in siswaList) {
+      final id = siswa['id'] as int;
+      final status = absensiMap[id];
+      final noHp = siswa['no_hp_ortu']?.toString().trim();
+
+      // Hanya kirim jika tidak hadir (S/I/A) dan ada nomor HP
+      if (status != null &&
+          status != 'H' &&
+          status != 'Hadir' &&
+          noHp != null &&
+          noHp.isNotEmpty) {
+        String statusFull = '';
+        if (status == 'S')
+          statusFull = 'Sakit';
+        else if (status == 'I')
+          statusFull = 'Izin';
+        else if (status == 'A')
+          statusFull = 'Alpha (Tanpa Keterangan)';
+        else
+          statusFull = status;
+
+        final bodyMsg =
+            "*Notifikasi Kehadiran Siswa*\n\n"
+            "Yth. Orang Tua/Wali dari *${siswa['nama_siswa']}*,\n\n"
+            "Menginformasikan bahwa putra/putri Bapak/Ibu tercatat *${statusFull}* pada:\n"
+            "📅 Tanggal: ${tanggalStr}\n"
+            "⏰ Jam Ke: ${jamKeStr}\n"
+            "📖 Mata Pelajaran: ${mapelStr}\n\n"
+            "Terima kasih.\n"
+            "_Pesan otomatis dari Jurnal Mengajar_";
+
+        try {
+          final response = await http.post(
+            Uri.parse('https://id.nobox.ai/Inbox/Send'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              "ExtId": noHp.replaceAll(
+                RegExp(r'[^0-9]'),
+                '',
+              ), // Bersihkan nomor
+              "ChannelId": "1",
+              "AccountIds": "664334723301381",
+              "BodyType": "Text",
+              "Body": bodyMsg,
+              "Attachment": "",
+            }),
+          );
+
+          if (response.statusCode == 200) {
+            final resData = jsonDecode(response.body);
+            if (resData['IsError'] == false) {
+              countSent++;
+            }
+          }
+        } catch (e) {
+          debugPrint('Gagal mengirim WA ke $noHp: $e');
+        }
+      }
+    }
+
+    if (countSent > 0) {
+      Get.snackbar(
+        'WhatsApp Terkirim',
+        '$countSent notifikasi ketidakhadiran telah dikirim ke orang tua siswa.',
+        backgroundColor: Colors.blue.shade700,
+        colorText: Colors.white,
+        snackPosition: SnackPosition.TOP,
+        icon: FaIcon(FontAwesomeIcons.whatsapp, color: Colors.white),
+      );
     }
   }
 }
@@ -402,7 +559,8 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (controller.isEdit && controller.jurnalStatus.value == 'rejected')
+                  if (controller.isEdit &&
+                      controller.jurnalStatus.value == 'rejected')
                     Container(
                       margin: const EdgeInsets.only(bottom: 20),
                       padding: const EdgeInsets.all(16),
@@ -416,7 +574,11 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
                         children: [
                           Row(
                             children: [
-                              Icon(Icons.warning_amber_rounded, color: Colors.red.shade700, size: 20),
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: Colors.red.shade700,
+                                size: 20,
+                              ),
                               const SizedBox(width: 8),
                               Text(
                                 'Jurnal ditolak, silahkan diperbarui',
@@ -449,8 +611,8 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
                               border: Border.all(color: Colors.red.shade100),
                             ),
                             child: Text(
-                              controller.catatanAdmin.value.isEmpty 
-                                  ? 'Tidak ada catatan khusus dari admin.' 
+                              controller.catatanAdmin.value.isEmpty
+                                  ? 'Tidak ada catatan khusus dari admin.'
                                   : controller.catatanAdmin.value,
                               style: TextStyle(
                                 color: Colors.red.shade800,
@@ -463,38 +625,12 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
                         ],
                       ),
                     ),
-                  
+
                   _buildLabel('Tanggal'),
-                  GestureDetector(
-                    onTap: () => controller.pickDate(context),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey.shade300),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            DateFormat(
-                              'dd MMMM yyyy',
-                            ).format(controller.selectedTanggal.value),
-                            style: TextStyle(
-                              fontFamily: GoogleFonts.poppins().fontFamily,
-                            ),
-                          ),
-                          const Icon(
-                            Icons.calendar_today,
-                            size: 20,
-                            color: Colors.grey,
-                          ),
-                        ],
-                      ),
-                    ),
+                  _buildDisabledField(
+                    DateFormat(
+                      'dd MMMM yyyy',
+                    ).format(controller.selectedTanggal.value),
                   ),
                   const SizedBox(height: 16),
 
@@ -678,113 +814,133 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _buildLabel('Lampiran (min. 3 foto)'),
-                      IconButton(
-                        icon: const Icon(
-                          Icons.add_circle,
-                          color: Colors.indigo,
-                          size: 28,
-                        ),
-                        onPressed: () => controller.pickPhotos(),
-                      ),
-                    ],
-                  ),
-                  // Image grid
+                  _buildLabel('Foto Kegiatan (Minimal 3 Foto)'),
+                  const SizedBox(height: 8),
                   Obx(
                     () => Column(
                       children: [
-                        if (controller.existingImagesUrl.isNotEmpty ||
-                            controller.selectedImages.isNotEmpty)
+                        // Large box if no images selected
+                        if (controller.existingImagesUrl.isEmpty &&
+                            controller.selectedImages.isEmpty)
+                          GestureDetector(
+                            onTap: () => controller.pickPhotos(),
+                            child: Container(
+                              width: double.infinity,
+                              height: 220,
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: Colors.grey.shade300,
+                                  width: 2,
+                                  style: BorderStyle.solid,
+                                ),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.05),
+                                          blurRadius: 10,
+                                          spreadRadius: 2,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Icon(
+                                      Icons.camera_alt_rounded,
+                                      size: 48,
+                                      color: MainColor.primaryColor,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'Buka Kamera untuk Foto',
+                                    style: TextStyle(
+                                      fontFamily:
+                                          GoogleFonts.poppins().fontFamily,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Wajib ambil minimal 3 foto langsung',
+                                    style: TextStyle(
+                                      fontFamily:
+                                          GoogleFonts.poppins().fontFamily,
+                                      fontSize: 12,
+                                      color: Colors.grey.shade500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else
                           GridView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             gridDelegate:
                                 const SliverGridDelegateWithFixedCrossAxisCount(
                                   crossAxisCount: 3,
-                                  crossAxisSpacing: 8,
-                                  mainAxisSpacing: 8,
+                                  crossAxisSpacing: 10,
+                                  mainAxisSpacing: 10,
+                                  childAspectRatio: 1,
                                 ),
                             itemCount:
                                 controller.existingImagesUrl.length +
-                                controller.selectedImages.length,
+                                controller.selectedImages.length +
+                                1, // +1 for the add button
                             itemBuilder: (context, index) {
+                              // If it's the last item, show "Add more" button
+                              if (index ==
+                                  controller.existingImagesUrl.length +
+                                      controller.selectedImages.length) {
+                                return GestureDetector(
+                                  onTap: () => controller.pickPhotos(),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade100,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: Colors.grey.shade300,
+                                        style: BorderStyle.solid,
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      Icons.add_a_photo_outlined,
+                                      color: Colors.grey.shade600,
+                                      size: 28,
+                                    ),
+                                  ),
+                                );
+                              }
+
                               bool isExisting =
                                   index < controller.existingImagesUrl.length;
                               if (isExisting) {
                                 final url = controller.existingImagesUrl[index];
-                                return Stack(
-                                  children: [
-                                    Container(
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(8),
-                                        image: DecorationImage(
-                                          image: NetworkImage(url),
-                                          fit: BoxFit.cover,
-                                        ),
-                                      ),
-                                    ),
-                                    Positioned(
-                                      top: 2,
-                                      right: 2,
-                                      child: GestureDetector(
-                                        onTap: () => controller
-                                            .removeExistingPhoto(index),
-                                        child: Container(
-                                          padding: const EdgeInsets.all(2),
-                                          decoration: const BoxDecoration(
-                                            color: Colors.black54,
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: const Icon(
-                                            Icons.close,
-                                            color: Colors.white,
-                                            size: 16,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+                                return _buildImageItem(
+                                  url: url,
+                                  onDelete: () =>
+                                      controller.removeExistingPhoto(index),
                                 );
                               } else {
                                 final fileIndex =
                                     index - controller.existingImagesUrl.length;
                                 final file =
                                     controller.selectedImages[fileIndex];
-                                return Stack(
-                                  children: [
-                                    Container(
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(8),
-                                        image: DecorationImage(
-                                          image: FileImage(file),
-                                          fit: BoxFit.cover,
-                                        ),
-                                      ),
-                                    ),
-                                    Positioned(
-                                      top: 2,
-                                      right: 2,
-                                      child: GestureDetector(
-                                        onTap: () =>
-                                            controller.removePhoto(fileIndex),
-                                        child: Container(
-                                          padding: const EdgeInsets.all(2),
-                                          decoration: const BoxDecoration(
-                                            color: Colors.black54,
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: const Icon(
-                                            Icons.close,
-                                            color: Colors.white,
-                                            size: 16,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+                                return _buildImageItem(
+                                  file: file,
+                                  onDelete: () =>
+                                      controller.removePhoto(fileIndex),
                                 );
                               }
                             },
@@ -922,6 +1078,44 @@ class FormJurnalMengajarGuruPage extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildImageItem({
+    String? url,
+    File? file,
+    required VoidCallback onDelete,
+  }) {
+    return Stack(
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade200),
+            image: DecorationImage(
+              image: url != null
+                  ? NetworkImage(url)
+                  : FileImage(file!) as ImageProvider,
+              fit: BoxFit.cover,
+            ),
+          ),
+        ),
+        Positioned(
+          top: 6,
+          right: 6,
+          child: GestureDetector(
+            onTap: onDelete,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.5),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.close, color: Colors.white, size: 14),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

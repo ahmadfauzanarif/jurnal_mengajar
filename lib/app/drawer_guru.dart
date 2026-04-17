@@ -4,6 +4,7 @@ import 'package:jurnal_mengajar/app/color.dart';
 import 'package:jurnal_mengajar/app/login.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:get/get.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jurnal_mengajar/app/about_page.dart';
 import 'package:jurnal_mengajar/app/dashboard_guru.dart';
 import 'package:jurnal_mengajar/app/jadwal_mengajar_guru_page.dart';
@@ -31,14 +32,22 @@ class DrawerGuru extends StatelessWidget {
             ),
           ),
           const Divider(),
-          _buildMenuItem(Icons.dashboard, 'Dashboard', onTap: () {
-            Get.back();
-            Get.offAll(() => const DashboardGuru());
-          }),
-          _buildMenuItem(Icons.event_note, 'Jadwal Mengajar', onTap: () {
-            Get.back();
-            Get.to(() => const JadwalMengajarGuruPage());
-          }),
+          _buildMenuItem(
+            Icons.dashboard,
+            'Dashboard',
+            onTap: () {
+              Get.back();
+              Get.offAll(() => const DashboardGuru());
+            },
+          ),
+          _buildMenuItem(
+            Icons.event_note,
+            'Jadwal Mengajar',
+            onTap: () {
+              Get.back();
+              Get.to(() => const JadwalMengajarGuruPage());
+            },
+          ),
           _buildMenuItem(
             Icons.library_books_outlined,
             'Jurnal Mengajar',
@@ -60,7 +69,11 @@ class DrawerGuru extends StatelessWidget {
             Icons.exit_to_app,
             'Keluar',
             onTap: () async {
+              final SharedPreferences prefs =
+                  await SharedPreferences.getInstance();
+              await prefs.clear();
               await Supabase.instance.client.auth.signOut();
+              Get.deleteAll(force: true); // Reset state controller saat logout
               Get.offAll(() => const Login());
             },
           ),

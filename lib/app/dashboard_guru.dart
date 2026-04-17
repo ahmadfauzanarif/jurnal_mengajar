@@ -27,7 +27,7 @@ class DashboardGuru extends StatelessWidget {
         title: Obx(() {
           final profile = controller.userProfile.value;
           String nama = profile['nama_lengkap'] ?? 'Nama Guru';
-          String jabatan = 'Guru';
+          String jabatan = profile['jabatan'] ?? 'Guru';
           String? fotoUrl = profile['foto_url'];
 
           return Row(
@@ -117,10 +117,22 @@ class DashboardGuru extends StatelessWidget {
                             else
                               ...controller.groupedSchedules.map((group) {
                                 final firstSchedule = group.first;
-                                bool sudahDiisi = group.every(
+                                // Cek apakah sudah ada jurnal di SALAH SATU jadwal dalam grup
+                                bool sudahDiisi = group.any(
                                   (s) =>
                                       (s['jurnal_harian'] as List).isNotEmpty,
                                 );
+                                // Cari jurnalId dari jadwal manapun yang sudah punya jurnal
+                                int? existingJurnalId;
+                                Map<String, dynamic>? scheduleWithJournal;
+                                for (var s in group) {
+                                  final jList = s['jurnal_harian'] as List? ?? [];
+                                  if (jList.isNotEmpty) {
+                                    existingJurnalId = jList[0]['id'] as int;
+                                    scheduleWithJournal = Map<String, dynamic>.from(s);
+                                    break;
+                                  }
+                                }
 
                                 String startTime =
                                     group.first['master_jam']['waktu_reguler']
@@ -153,6 +165,7 @@ class DashboardGuru extends StatelessWidget {
                                       sudahDiisi,
                                       controller,
                                       groupedSchedules: group,
+                                      existingJurnalId: existingJurnalId,
                                     );
                                   },
                                 );
@@ -455,6 +468,7 @@ class DashboardGuru extends StatelessWidget {
     bool sudahDiisi,
     DashboardGuruController controller, {
     List<Map<String, dynamic>> groupedSchedules = const [],
+    int? existingJurnalId,
   }) {
     // Build combined time from group
     String time;
@@ -480,6 +494,13 @@ class DashboardGuru extends StatelessWidget {
     String dateStr = schedule['tanggal'];
     DateTime scheduleDate = DateTime.parse(dateStr);
     String formattedDate = DateFormat('dd MMMM yyyy').format(scheduleDate);
+
+    final journalList = schedule['jurnal_harian'] as List? ?? [];
+    final String status = journalList.isNotEmpty
+        ? journalList[0]['status']?.toString().toLowerCase() ?? 'pending'
+        : 'pending';
+    final bool isApproved =
+        status == 'validated' || status == 'approved' || status == 'disetujui';
 
     showModalBottomSheet(
       context: context,
@@ -515,11 +536,15 @@ class DashboardGuru extends StatelessWidget {
                 child: Center(
                   child: Text(
                     sudahDiisi
-                        ? 'Jurnal dari jadwal ini sudah diisi'
+                        ? (isApproved
+                            ? 'Jurnal sudah diisi dan divalidasi admin'
+                            : 'Jurnal dari jadwal ini sudah diisi')
                         : 'Jurnal dari jadwal ini belum diisi',
                     style: TextStyle(
                       color: sudahDiisi
-                          ? Colors.green.shade800
+                          ? (isApproved
+                              ? Colors.blue.shade800
+                              : Colors.green.shade800)
                           : MainColor.primaryColor,
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
@@ -530,7 +555,7 @@ class DashboardGuru extends StatelessWidget {
               ),
               const SizedBox(height: 20),
               Text(
-                Supabase.instance.client.auth.currentUser?.email ?? 'Guru',
+                controller.userProfile['nama_lengkap'] ?? 'Guru',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -584,93 +609,92 @@ class DashboardGuru extends StatelessWidget {
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: MainColor.primaryColor,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  onPressed: () {
-                    DateTime now = DateTime.now();
-                    DateTime pureDate = DateTime(
-                      scheduleDate.year,
-                      scheduleDate.month,
-                      scheduleDate.day,
-                    );
-                    DateTime pureNow = DateTime(now.year, now.month, now.day);
-
-                    bool canFill = true;
-                    if (pureDate.isAfter(pureNow)) {
-                      canFill = false;
-                    } else if (pureDate.isAtSameMomentAs(pureNow)) {
-                      String startTimeStr = time.split('-')[0].trim();
-                      try {
-                        List<String> parts = startTimeStr.split('.');
-                        int startHour = int.parse(parts[0]);
-                        int startMin = int.parse(parts[1]);
-                        DateTime startTime = DateTime(
-                          now.year,
-                          now.month,
-                          now.day,
-                          startHour,
-                          startMin,
-                        );
-                        if (now.isBefore(startTime)) {
-                          canFill = false;
-                        }
-                      } catch (e) {
-                        // ignore parse error, format might differ
-                      }
-                    }
-
-                    if (!canFill) {
-                      Get.back(); // close modal
-                      Get.snackbar(
-                        'Peringatan',
-                        'Anda belum bisa mengisi jurnal. Waktu pelaksanaan jadwal kelas belum tiba.',
-                        backgroundColor: Colors.orange,
-                        colorText: Colors.white,
-                        snackPosition: SnackPosition.BOTTOM,
-                        margin: const EdgeInsets.all(20),
-                      );
-                      return;
-                    }
-
-                    Get.back(); // Close modal
-                    Get.to(
-                      () => FormJurnalMengajarGuruPage(
-                        schedule: schedule as Map<String, dynamic>,
-                        groupedSchedules: groupedSchedules.isNotEmpty
-                            ? groupedSchedules
-                            : [schedule],
-                        isEdit: sudahDiisi,
-                        jurnalId: sudahDiisi
-                            ? schedule['jurnal_harian'][0]['id']
-                            : null,
+              if (!isApproved)
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: MainColor.primaryColor,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    )?.then((value) {
-                      if (value == true) {
-                        controller.fetchDataByDate(
-                          controller.selectedDate.value,
-                        );
+                    ),
+                    onPressed: () {
+                      DateTime now = DateTime.now();
+                      DateTime pureDate = DateTime(
+                        scheduleDate.year,
+                        scheduleDate.month,
+                        scheduleDate.day,
+                      );
+                      DateTime pureNow = DateTime(now.year, now.month, now.day);
+
+                      bool canFill = true;
+                      if (pureDate.isAfter(pureNow)) {
+                        canFill = false;
+                      } else if (pureDate.isAtSameMomentAs(pureNow)) {
+                        String startTimeStr = time.split('-')[0].trim();
+                        try {
+                          List<String> parts = startTimeStr.split('.');
+                          int startHour = int.parse(parts[0]);
+                          int startMin = int.parse(parts[1]);
+                          DateTime startTime = DateTime(
+                            now.year,
+                            now.month,
+                            now.day,
+                            startHour,
+                            startMin,
+                          );
+                          if (now.isBefore(startTime)) {
+                            canFill = false;
+                          }
+                        } catch (e) {
+                          // ignore parse error, format might differ
+                        }
                       }
-                    });
-                  },
-                  child: Text(
-                    sudahDiisi ? 'Edit Jurnal' : 'Isi Jurnal',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: GoogleFonts.poppins().fontFamily,
+
+                      if (!canFill) {
+                        Get.back(); // close modal
+                        Get.snackbar(
+                          'Peringatan',
+                          'Anda belum bisa mengisi jurnal. Waktu pelaksanaan jadwal kelas belum tiba.',
+                          backgroundColor: Colors.orange,
+                          colorText: Colors.white,
+                          snackPosition: SnackPosition.BOTTOM,
+                          margin: const EdgeInsets.all(20),
+                        );
+                        return;
+                      }
+
+                      Get.back(); // Close modal
+                      Get.to(
+                        () => FormJurnalMengajarGuruPage(
+                          schedule: schedule as Map<String, dynamic>,
+                          groupedSchedules: groupedSchedules.isNotEmpty
+                              ? groupedSchedules
+                              : [schedule],
+                          isEdit: sudahDiisi,
+                          jurnalId: existingJurnalId,
+                        ),
+                      )?.then((value) {
+                        if (value == true) {
+                          controller.fetchDataByDate(
+                            controller.selectedDate.value,
+                          );
+                        }
+                      });
+                    },
+                    child: Text(
+                      sudahDiisi ? 'Edit Jurnal' : 'Isi Jurnal',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: GoogleFonts.poppins().fontFamily,
+                      ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         );

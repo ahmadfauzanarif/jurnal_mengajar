@@ -15,6 +15,7 @@ class EditProfilGuruController extends GetxController {
   var namaController = TextEditingController();
   var alamatController = TextEditingController();
   var noTelpController = TextEditingController();
+  var jabatanController = TextEditingController();
 
   var currentFotoUrl = RxnString();
   var newImageFile = Rxn<File>();
@@ -39,6 +40,7 @@ class EditProfilGuruController extends GetxController {
         namaController.text = profileRes['nama_lengkap'] ?? '';
         alamatController.text = profileRes['alamat'] ?? '';
         noTelpController.text = profileRes['no_telp'] ?? '';
+        jabatanController.text = profileRes['jabatan'] ?? '';
         currentFotoUrl.value = profileRes['foto_url'];
       }
     } catch (e) {
@@ -51,37 +53,9 @@ class EditProfilGuruController extends GetxController {
   Future<void> pickImage() async {
     final picker = ImagePicker();
 
-    // Show choice dialog
-    final source = await Get.dialog<ImageSource>(
-      AlertDialog(
-        title: Text('Pilih Sumber Foto',
-            style: TextStyle(fontFamily: GoogleFonts.poppins().fontFamily)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.camera_alt, color: Colors.indigo),
-              title: Text('Kamera',
-                  style:
-                      TextStyle(fontFamily: GoogleFonts.poppins().fontFamily)),
-              onTap: () => Get.back(result: ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library, color: Colors.indigo),
-              title: Text('Galeri',
-                  style:
-                      TextStyle(fontFamily: GoogleFonts.poppins().fontFamily)),
-              onTap: () => Get.back(result: ImageSource.gallery),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (source == null) return;
-
     final pickedFile = await picker.pickImage(
-      source: source,
+      source: ImageSource.camera,
+      preferredCameraDevice: CameraDevice.front,
       imageQuality: 70,
     );
 
@@ -119,6 +93,7 @@ class EditProfilGuruController extends GetxController {
             'nama_lengkap': namaController.text,
             'alamat': alamatController.text,
             'no_telp': noTelpController.text,
+            'jabatan': jabatanController.text,
             'foto_url': updatedFotoUrl,
           })
           .eq('id', user.id);
@@ -173,25 +148,45 @@ class EditProfilGuruPage extends StatelessWidget {
                   Center(
                     child: Stack(
                       children: [
-                        CircleAvatar(
-                          radius: 50,
-                          backgroundColor: Colors.grey.shade200,
-                          backgroundImage: controller.newImageFile.value != null
-                              ? FileImage(controller.newImageFile.value!)
-                                    as ImageProvider
-                              : (controller.currentFotoUrl.value != null
-                                    ? NetworkImage(
-                                        controller.currentFotoUrl.value!,
-                                      )
-                                    : null),
+                        Container(
+                          width: 100,
+                          height: 100,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade200,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                            image:
+                                controller.newImageFile.value != null
+                                    ? DecorationImage(
+                                      image: FileImage(
+                                        controller.newImageFile.value!,
+                                      ),
+                                      fit: BoxFit.cover,
+                                    )
+                                    : (controller.currentFotoUrl.value != null
+                                        ? DecorationImage(
+                                          image: NetworkImage(
+                                            controller.currentFotoUrl.value!,
+                                          ),
+                                          fit: BoxFit.cover,
+                                        )
+                                        : null),
+                          ),
                           child:
                               (controller.newImageFile.value == null &&
                                   controller.currentFotoUrl.value == null)
                               ? Icon(
-                                  Icons.person,
-                                  size: 50,
-                                  color: Colors.grey.shade400,
-                                )
+                                Icons.person,
+                                size: 50,
+                                color: Colors.grey.shade400,
+                              )
                               : null,
                         ),
                         Positioned(
@@ -255,6 +250,21 @@ class EditProfilGuruPage extends StatelessWidget {
                     keyboardType: TextInputType.phone,
                     decoration: InputDecoration(
                       hintText: 'Nomor telepon...',
+                      hintStyle: TextStyle(
+                        fontFamily: GoogleFonts.poppins().fontFamily,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  _buildLabel('Jabatan / Posisi'),
+                  TextField(
+                    controller: controller.jabatanController,
+                    decoration: InputDecoration(
+                      hintText: 'Contoh: Guru Matematika, Wali Kelas...',
                       hintStyle: TextStyle(
                         fontFamily: GoogleFonts.poppins().fontFamily,
                       ),

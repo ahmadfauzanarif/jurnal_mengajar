@@ -13,11 +13,29 @@ class JadwalMengajarGuruController extends GetxController {
   var selectedDate = DateTime.now().obs;
   var schedules = [].obs;
   var groupedSchedules = <List<Map<String, dynamic>>>[].obs;
+  var userProfile = {}.obs;
 
   @override
   void onInit() {
     super.onInit();
+    fetchUserProfile();
     fetchDataByDate(selectedDate.value);
+  }
+
+  Future<void> fetchUserProfile() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user != null) {
+        final profileRes = await supabase
+            .from('profiles')
+            .select()
+            .eq('id', user.id)
+            .single();
+        userProfile.value = profileRes;
+      }
+    } catch (e) {
+      print('Error fetching user profile: $e');
+    }
   }
 
   Future<void> fetchDataByDate(DateTime date) async {
@@ -32,7 +50,7 @@ class JadwalMengajarGuruController extends GetxController {
       final scheduleRes = await supabase
           .from('jadwal_mengajar')
           .select(
-            '*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*), jurnal_harian(id)',
+            '*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*), jurnal_harian(id, status)',
           )
           .eq('guru_id', user.id)
           .eq('tanggal', dateStr)
@@ -124,9 +142,18 @@ class JadwalMengajarGuruPage extends StatelessWidget {
 
                           final group = controller.groupedSchedules[index];
                           final firstSchedule = group.first;
-                          bool sudahDiisi = group.every(
+                          bool sudahDiisi = group.any(
                             (s) => (s['jurnal_harian'] as List).isNotEmpty,
                           );
+                          // Cari jurnalId dari jadwal manapun yang sudah punya jurnal
+                          int? existingJurnalId;
+                          for (var s in group) {
+                            final jList = s['jurnal_harian'] as List? ?? [];
+                            if (jList.isNotEmpty) {
+                              existingJurnalId = jList[0]['id'] as int;
+                              break;
+                            }
+                          }
 
                           String startTime =
                               group.first['master_jam']['waktu_reguler']
@@ -155,6 +182,7 @@ class JadwalMengajarGuruPage extends StatelessWidget {
                                 firstSchedule,
                                 sudahDiisi,
                                 groupedSchedules: group,
+                                existingJurnalId: existingJurnalId,
                               );
                             },
                           );
@@ -173,6 +201,7 @@ class JadwalMengajarGuruPage extends StatelessWidget {
     Map schedule,
     bool sudahDiisi, {
     List<Map<String, dynamic>> groupedSchedules = const [],
+    int? existingJurnalId,
   }) {
     // Build combined time
     String time;
@@ -195,9 +224,14 @@ class JadwalMengajarGuruPage extends StatelessWidget {
       time = schedule['master_jam']['waktu_reguler'] ?? '';
       jamKeLabel = 'Jam ke ${schedule['master_jam']['jam_ke']}';
     }
-    String date = DateFormat(
-      'dd MMMM yyyy',
-    ).format(DateTime.parse(schedule['tanggal']));
+    String date = DateFormat('dd MMMM yyyy').format(DateTime.parse(schedule['tanggal']));
+
+    final journalList = schedule['jurnal_harian'] as List? ?? [];
+    final String status = journalList.isNotEmpty
+        ? journalList[0]['status']?.toString().toLowerCase() ?? 'pending'
+        : 'pending';
+    final bool isApproved =
+        status == 'validated' || status == 'approved' || status == 'disetujui';
 
     showModalBottomSheet(
       context: context,
@@ -233,11 +267,15 @@ class JadwalMengajarGuruPage extends StatelessWidget {
                 child: Center(
                   child: Text(
                     sudahDiisi
-                        ? 'Jurnal dari jadwal ini sudah diisi'
+                        ? (isApproved
+                            ? 'Jurnal sudah diisi dan divalidasi admin'
+                            : 'Jurnal dari jadwal ini sudah diisi')
                         : 'Jurnal dari jadwal ini belum diisi',
                     style: TextStyle(
                       color: sudahDiisi
-                          ? Colors.green.shade800
+                          ? (isApproved
+                              ? Colors.blue.shade800
+                              : Colors.green.shade800)
                           : MainColor.primaryColor,
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
@@ -247,14 +285,14 @@ class JadwalMengajarGuruPage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 20),
-              Text(
-                Supabase.instance.client.auth.currentUser?.email ?? 'Guru',
+              Obx(() => Text(
+                Get.find<JadwalMengajarGuruController>().userProfile['nama_lengkap'] ?? 'Guru',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                   fontFamily: GoogleFonts.poppins().fontFamily,
                 ),
-              ),
+              )),
               const SizedBox(height: 4),
               Text(
                 schedule['master_kelas']['nama_kelas'] ?? '',
@@ -302,94 +340,94 @@ class JadwalMengajarGuruPage extends StatelessWidget {
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: MainColor.primaryColor,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  onPressed: () {
-                    DateTime scheduleDate = DateTime.parse(schedule['tanggal']);
-                    DateTime now = DateTime.now();
-                    DateTime pureDate = DateTime(
-                      scheduleDate.year,
-                      scheduleDate.month,
-                      scheduleDate.day,
-                    );
-                    DateTime pureNow = DateTime(now.year, now.month, now.day);
-
-                    bool canFill = true;
-                    if (pureDate.isAfter(pureNow)) {
-                      canFill = false;
-                    } else if (pureDate.isAtSameMomentAs(pureNow)) {
-                      String startTimeStr = time.split('-')[0].trim();
-                      try {
-                        List<String> parts = startTimeStr.split('.');
-                        int startHour = int.parse(parts[0]);
-                        int startMin = int.parse(parts[1]);
-                        DateTime startTime = DateTime(
-                          now.year,
-                          now.month,
-                          now.day,
-                          startHour,
-                          startMin,
-                        );
-                        if (now.isBefore(startTime)) {
-                          canFill = false;
-                        }
-                      } catch (e) {}
-                    }
-
-                    if (!canFill) {
-                      Get.back(); // close modal
-                      Get.snackbar(
-                        'Peringatan',
-                        'Anda belum bisa mengisi jurnal. Waktu pelaksanaan jadwal kelas belum tiba.',
-                        backgroundColor: Colors.orange,
-                        colorText: Colors.white,
-                        snackPosition: SnackPosition.BOTTOM,
-                        margin: const EdgeInsets.all(20),
-                      );
-                      return;
-                    }
-
-                    Get.back(); // Close modal
-                    Get.to(
-                      () => FormJurnalMengajarGuruPage(
-                        schedule: schedule as Map<String, dynamic>,
-                        groupedSchedules: groupedSchedules.isNotEmpty
-                            ? groupedSchedules
-                            : [schedule],
-                        isEdit: sudahDiisi,
-                        jurnalId: sudahDiisi
-                            ? schedule['jurnal_harian'][0]['id']
-                            : null,
+              if (!isApproved)
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: MainColor.primaryColor,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    )?.then((value) {
-                      if (value == true) {
-                        final controller =
-                            Get.find<JadwalMengajarGuruController>();
-                        controller.fetchDataByDate(
-                          controller.selectedDate.value,
-                        );
+                    ),
+                    onPressed: () {
+                      DateTime scheduleDate =
+                          DateTime.parse(schedule['tanggal']);
+                      DateTime now = DateTime.now();
+                      DateTime pureDate = DateTime(
+                        scheduleDate.year,
+                        scheduleDate.month,
+                        scheduleDate.day,
+                      );
+                      DateTime pureNow = DateTime(now.year, now.month, now.day);
+
+                      bool canFill = true;
+                      if (pureDate.isAfter(pureNow)) {
+                        canFill = false;
+                      } else if (pureDate.isAtSameMomentAs(pureNow)) {
+                        String startTimeStr = time.split('-')[0].trim();
+                        try {
+                          List<String> parts = startTimeStr.split('.');
+                          int startHour = int.parse(parts[0]);
+                          int startMin = int.parse(parts[1]);
+                          DateTime startTime = DateTime(
+                            now.year,
+                            now.month,
+                            now.day,
+                            startHour,
+                            startMin,
+                          );
+                          if (now.isBefore(startTime)) {
+                            canFill = false;
+                          }
+                        } catch (e) {}
                       }
-                    });
-                  },
-                  child: Text(
-                    sudahDiisi ? 'Edit Jurnal' : 'Isi Jurnal',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: GoogleFonts.poppins().fontFamily,
+
+                      if (!canFill) {
+                        Get.back(); // close modal
+                        Get.snackbar(
+                          'Peringatan',
+                          'Anda belum bisa mengisi jurnal. Waktu pelaksanaan jadwal kelas belum tiba.',
+                          backgroundColor: Colors.orange,
+                          colorText: Colors.white,
+                          snackPosition: SnackPosition.BOTTOM,
+                          margin: const EdgeInsets.all(20),
+                        );
+                        return;
+                      }
+
+                      Get.back(); // Close modal
+                      Get.to(
+                        () => FormJurnalMengajarGuruPage(
+                          schedule: schedule as Map<String, dynamic>,
+                          groupedSchedules: groupedSchedules.isNotEmpty
+                              ? groupedSchedules
+                              : [schedule],
+                          isEdit: sudahDiisi,
+                          jurnalId: existingJurnalId,
+                        ),
+                      )?.then((value) {
+                        if (value == true) {
+                          final controller =
+                              Get.find<JadwalMengajarGuruController>();
+                          controller.fetchDataByDate(
+                            controller.selectedDate.value,
+                          );
+                        }
+                      });
+                    },
+                    child: Text(
+                      sudahDiisi ? 'Edit Jurnal' : 'Isi Jurnal',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: GoogleFonts.poppins().fontFamily,
+                      ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         );

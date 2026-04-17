@@ -55,7 +55,7 @@ class DashboardGuruController extends GetxController {
       // Need to find if a journal exists to determine status (blue vs grey)
       final scheduleRes = await supabase
           .from('jadwal_mengajar')
-          .select('*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*), jurnal_harian(id)')
+          .select('*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*), jurnal_harian(id, status)')
           .eq('guru_id', user.id)
           .eq('tanggal', dateStr)
           .eq('is_active', true)
@@ -80,14 +80,35 @@ class DashboardGuruController extends GetxController {
       }
       groupedSchedules.value = groups;
 
-      // Fetch journals
       final journalRes = await supabase
           .from('jurnal_harian')
           .select('*, presensi_siswa(*), jadwal_mengajar!inner(*, master_kelas(nama_kelas), master_mata_pelajaran(nama_mata_pelajaran), master_jam(*))')
           .eq('jadwal_mengajar.guru_id', user.id)
           .eq('tanggal', dateStr);
 
-      journals.value = journalRes;
+      // Grouping Journals to prevent duplicates for consecutive periods
+      List<Map<String, dynamic>> distinctJournals = [];
+      for (var j in journalRes) {
+        final jMap = Map<String, dynamic>.from(j);
+        final jadwal = jMap['jadwal_mengajar'];
+        
+        bool isDuplicate = false;
+        for (var existing in distinctJournals) {
+          final existingJadwal = existing['jadwal_mengajar'];
+          if (existingJadwal['kelas_id'] == jadwal['kelas_id'] &&
+              existingJadwal['mata_pelajaran_id'] == jadwal['mata_pelajaran_id'] &&
+              existing['tanggal'] == jMap['tanggal']) {
+            isDuplicate = true;
+            break;
+          }
+        }
+        
+        if (!isDuplicate) {
+          distinctJournals.add(jMap);
+        }
+      }
+
+      journals.value = distinctJournals;
     } catch (e) {
       print('Fetch Data Error: $e');
     } finally {

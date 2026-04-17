@@ -26,7 +26,8 @@ class RegisterController extends GetxController {
   Future<void> pickImage() async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(
-      source: ImageSource.gallery,
+      source: ImageSource.camera,
+      preferredCameraDevice: CameraDevice.front,
       imageQuality: 70,
     );
 
@@ -172,17 +173,27 @@ class RegisterPage extends StatelessWidget {
                             width: 120,
                             height: 120,
                             decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.grey.shade200, width: 4),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.grey.shade200,
+                                width: 4,
+                              ),
                               image: controller.profileImage.value != null
                                   ? DecorationImage(
-                                      image: FileImage(controller.profileImage.value!),
+                                      image: FileImage(
+                                        controller.profileImage.value!,
+                                      ),
                                       fit: BoxFit.cover,
                                     )
                                   : null,
                             ),
                             child: controller.profileImage.value == null
-                                ? Icon(Icons.person, size: 80, color: Colors.grey.shade400)
+                                ? Icon(
+                                    Icons.person,
+                                    size: 80,
+                                    color: Colors.grey.shade400,
+                                  )
                                 : null,
                           ),
                         ],
@@ -198,7 +209,7 @@ class RegisterPage extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                     ),
                     child: Text(
-                      'Upload Foto',
+                      'Ambil Foto',
                       style: TextStyle(
                         fontFamily: GoogleFonts.poppins().fontFamily,
                         fontSize: 14,

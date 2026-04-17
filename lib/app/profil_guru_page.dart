@@ -75,7 +75,7 @@ class ProfilGuruPage extends StatelessWidget {
 
         final prof = controller.profile.value;
         String nama = prof['nama_lengkap'] ?? 'Nama Lengkap';
-        String jabatan = 'Guru';
+        String jabatan = prof['jabatan'] ?? 'Guru';
         String? fotoUrl = prof['foto_url'];
         String alamat = prof['alamat'] ?? '-';
         String noTelp = prof['no_telp'] ?? '-';

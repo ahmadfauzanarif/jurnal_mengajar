@@ -70,12 +70,44 @@ class JurnalMengajarAdminController extends GetxController {
           .eq('tanggal', dateStr)
           .order('created_at', ascending: false);
 
+      // Grouping Journals for Admin view
+      List<Map<String, dynamic>> distinctJournals = [];
+      for (var j in response) {
+        final jMap = Map<String, dynamic>.from(j);
+        final jadwal = jMap['jadwal'];
+
+        bool isDuplicate = false;
+        for (var existing in distinctJournals) {
+          final existingJadwal = existing['jadwal'];
+          // Group by Guru, Kelas, Mapel, Materi, Tanggal
+          if (existingJadwal['guru_id'] == jadwal['guru_id'] &&
+              existingJadwal['kelas_id'] == jadwal['kelas_id'] &&
+              existingJadwal['mata_pelajaran_id'] ==
+                  jadwal['mata_pelajaran_id'] &&
+              existing['materi'] == jMap['materi'] &&
+              existing['tanggal'] == jMap['tanggal']) {
+            isDuplicate = true;
+            // Add ID to group
+            if (existing['group_ids'] == null) {
+              existing['group_ids'] = [existing['id']];
+            }
+            existing['group_ids'].add(jMap['id']);
+            break;
+          }
+        }
+
+        if (!isDuplicate) {
+          jMap['group_ids'] = [jMap['id']];
+          distinctJournals.add(jMap);
+        }
+      }
+
       if (showPendingOnly.value) {
         journals.assignAll(
-          response.where((j) => j['status'] == 'pending').toList(),
+          distinctJournals.where((j) => j['status'] == 'pending').toList(),
         );
       } else {
-        journals.assignAll(response);
+        journals.assignAll(distinctJournals);
       }
       filterLocal();
     } catch (e) {
@@ -117,7 +149,7 @@ class JurnalMengajarAdminController extends GetxController {
   }
 
   Future<void> validateJurnal(
-    int id,
+    List<int> ids,
     String status, {
     String? catatanAdmin,
   }) async {
@@ -133,7 +165,7 @@ class JurnalMengajarAdminController extends GetxController {
             'validated_at': DateTime.now().toIso8601String(),
             'catatan_admin': catatanAdmin,
           })
-          .eq('id', id);
+          .filter('id', 'in', ids);
 
       await fetchDataByDate(selectedDate.value);
       Get.snackbar('Berhasil', 'Status jurnal diperbarui menjadi $status');
@@ -168,7 +200,7 @@ class JurnalMengajarAdminPage extends StatelessWidget {
       backgroundColor: Colors.white,
       appBar: AppBar(
         title: Text(
-          'Jurnal Mengajar Admin',
+          'Jurnal Mengajar',
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.bold,
@@ -180,22 +212,26 @@ class JurnalMengajarAdminPage extends StatelessWidget {
       ),
       body: Column(
         children: [
+          const SizedBox(height: 16),
           _buildHorizontalCalendar(controller),
-          const Divider(thickness: 1, height: 1, color: Color(0xFFF0F0F0)),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 0),
+            child: Divider(thickness: 1, color: Color(0xFFEEDBCB)),
+          ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             child: TextField(
               onChanged: (val) => controller.searchQuery.value = val,
               decoration: InputDecoration(
                 hintText: 'Cari guru, materi, ksl...',
                 prefixIcon: const Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.grey.shade100,
+                contentPadding: const EdgeInsets.symmetric(vertical: 0),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
                 ),
-                contentPadding: EdgeInsets.zero,
+                fillColor: MainColor.primaryBackground,
+                filled: true,
               ),
             ),
           ),
@@ -246,12 +282,54 @@ class JurnalMengajarAdminPage extends StatelessWidget {
     return Obx(() {
       DateTime now = controller.selectedDate.value;
       DateTime startOfWeek = now.subtract(Duration(days: now.weekday % 7));
-      return Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    Icons.arrow_back_ios,
+                    size: 18,
+                    color: MainColor.primaryColor,
+                  ),
+                  onPressed: () => controller.changeDate(
+                    controller.selectedDate.value.subtract(
+                      const Duration(days: 1),
+                    ),
+                  ),
+                ),
+                Text(
+                  DateFormat(
+                    'MMMM yyyy',
+                    'id_ID',
+                  ).format(controller.selectedDate.value),
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: MainColor.primaryColor,
+                    fontFamily: GoogleFonts.poppins().fontFamily,
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    Icons.arrow_forward_ios,
+                    size: 18,
+                    color: MainColor.primaryColor,
+                  ),
+                  onPressed: () => controller.changeDate(
+                    controller.selectedDate.value.add(const Duration(days: 1)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+            child: Row(
               children: List.generate(7, (index) {
                 DateTime day = startOfWeek.add(Duration(days: index));
                 bool isSelected =
@@ -259,46 +337,51 @@ class JurnalMengajarAdminPage extends StatelessWidget {
                     DateFormat(
                       'yyyy-MM-dd',
                     ).format(controller.selectedDate.value);
-                return GestureDetector(
-                  onTap: () => controller.changeDate(day),
-                  child: Column(
-                    children: [
-                      Text(
-                        DateFormat('E', 'id_ID').format(day),
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isSelected
-                              ? MainColor.primaryColor
-                              : Colors.grey,
-                        ),
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () => controller.changeDate(day),
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? MainColor.primaryColor
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                      const SizedBox(height: 8),
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? MainColor.primaryColor
-                              : Colors.transparent,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Text(
-                            day.day.toString(),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            DateFormat('E', 'id_ID').format(day).toLowerCase(),
                             style: TextStyle(
-                              color: isSelected ? Colors.white : Colors.black,
-                              fontWeight: FontWeight.bold,
+                              color: isSelected ? Colors.white : Colors.grey,
+                              fontSize: 12,
+                              fontFamily: GoogleFonts.poppins().fontFamily,
                             ),
                           ),
-                        ),
+                          const SizedBox(height: 4),
+                          Text(
+                            day.day.toString(),
+                            style: TextStyle(
+                              color: isSelected
+                                  ? Colors.white
+                                  : MainColor.primaryText,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              fontFamily: GoogleFonts.poppins().fontFamily,
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 );
               }),
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 12),
+        ],
       );
     });
   }
@@ -311,91 +394,152 @@ class JurnalMengajarAdminPage extends StatelessWidget {
     final schedule = j['jadwal'] ?? {};
     final guru = schedule['profiles'] ?? {};
     final guruName = (guru['nama_lengkap'] ?? '-').toString();
-    final status = j['status'] ?? 'pending';
+    final status = (j['status'] ?? 'pending').toString().toLowerCase();
 
-    Color accentColor = status == 'approved'
-        ? Colors.green
-        : (status == 'rejected' ? Colors.orange : MainColor.primaryColor);
+    Color cardBg;
+    Color textColor;
+    Color subTextColor;
+    Color labelBg;
+    Color labelText;
+
+    if (status == 'approved' || status == 'disetujui') {
+      cardBg = const Color(0xFFF5F5F5); // Abu-abu halus
+      textColor = MainColor.primaryText;
+      subTextColor = Colors.grey.shade600;
+      labelBg = Colors.green.withOpacity(0.1);
+      labelText = Colors.green;
+    } else if (status == 'rejected') {
+      cardBg = const Color(0xFFFFF3E0); // Orange halus
+      textColor = const Color(0xFFE65100);
+      subTextColor = const Color(0xFFEF6C00).withOpacity(0.7);
+      labelBg = const Color(0xFFE65100).withOpacity(0.1);
+      labelText = const Color(0xFFE65100);
+    } else {
+      // PENDING
+      cardBg = MainColor.accentColor; // Biru
+      textColor = Colors.white;
+      subTextColor = Colors.white.withOpacity(0.8);
+      labelBg = Colors.white.withOpacity(0.2);
+      labelText = Colors.white;
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: cardBg,
+        borderRadius: BorderRadius.circular(10),
+        border: (status == 'approved' || status == 'disetujui')
+            ? Border.all(color: Colors.grey.shade300)
+            : null,
       ),
-      child: ListTile(
-        onTap: () => _showDetailSheet(context, j, controller),
-        leading: CircleAvatar(
-          backgroundImage: NetworkImage(
-            guru['foto_url'] ?? 'https://ui-avatars.com/api/?name=$guruName',
-          ),
-        ),
-        title: Text(
-          guruName,
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "${schedule['master_kelas']?['nama_kelas'] ?? '-'} • ${schedule['master_mata_pelajaran']?['nama_mata_pelajaran'] ?? '-'}",
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
-            ),
-            const SizedBox(height: 2),
-            Builder(
-              builder: (context) {
-                final List presensi = j['presensi_siswa'] as List? ?? [];
-                int sCount = presensi
-                    .where(
-                      (p) =>
-                          p['status'].toString().toUpperCase().startsWith('S'),
-                    )
-                    .length;
-                int iCount = presensi
-                    .where(
-                      (p) =>
-                          p['status'].toString().toUpperCase().startsWith('I'),
-                    )
-                    .length;
-                int aCount = presensi
-                    .where(
-                      (p) =>
-                          p['status'].toString().toUpperCase().startsWith('A'),
-                    )
-                    .length;
-                return Text(
-                  "S:$sCount I:$iCount A:$aCount",
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => _showDetailSheet(context, j, controller),
+          child: Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 25,
+                  backgroundImage: NetworkImage(
+                    guru['foto_url'] ??
+                        'https://ui-avatars.com/api/?name=$guruName&background=random',
                   ),
-                );
-              },
-            ),
-          ],
-        ),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: accentColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Text(
-            status.toUpperCase(),
-            style: TextStyle(
-              color: accentColor,
-              fontWeight: FontWeight.bold,
-              fontSize: 10,
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              guruName,
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                fontFamily: GoogleFonts.poppins().fontFamily,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: labelBg,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              status.toUpperCase(),
+                              style: TextStyle(
+                                color: labelText,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 9,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "${schedule['master_kelas']?['nama_kelas'] ?? '-'} • ${schedule['master_mata_pelajaran']?['nama_mata_pelajaran'] ?? '-'}",
+                        style: TextStyle(
+                          color: textColor.withOpacity(0.9),
+                          fontSize: 13,
+                          fontFamily: GoogleFonts.poppins().fontFamily,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Builder(
+                        builder: (context) {
+                          final List presensi =
+                              j['presensi_siswa'] as List? ?? [];
+                          int sCount = presensi
+                              .where(
+                                (p) => p['status']
+                                    .toString()
+                                    .toUpperCase()
+                                    .startsWith('S'),
+                              )
+                              .length;
+                          int iCount = presensi
+                              .where(
+                                (p) => p['status']
+                                    .toString()
+                                    .toUpperCase()
+                                    .startsWith('I'),
+                              )
+                              .length;
+                          int aCount = presensi
+                              .where(
+                                (p) => p['status']
+                                    .toString()
+                                    .toUpperCase()
+                                    .startsWith('A'),
+                              )
+                              .length;
+                          return Text(
+                            "Ketidakhadiran - S:$sCount I:$iCount A:$aCount",
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: subTextColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -440,7 +584,12 @@ class JurnalMengajarAdminPage extends StatelessWidget {
             color: Colors.white,
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.only(
+            left: 24,
+            right: 24,
+            top: 24,
+            bottom: 24 + MediaQuery.of(context).viewInsets.bottom,
+          ),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -631,7 +780,7 @@ class JurnalMengajarAdminPage extends StatelessWidget {
                             }
                             Get.back();
                             controller.validateJurnal(
-                              j['id'],
+                              List<int>.from(j['group_ids'] ?? [j['id']]),
                               'rejected',
                               catatanAdmin: rejectNoteController.text,
                             );
@@ -656,7 +805,7 @@ class JurnalMengajarAdminPage extends StatelessWidget {
                           onPressed: () {
                             Get.back();
                             controller.validateJurnal(
-                              j['id'],
+                              List<int>.from(j['group_ids'] ?? [j['id']]),
                               'approved',
                               catatanAdmin: rejectNoteController.text,
                             );
